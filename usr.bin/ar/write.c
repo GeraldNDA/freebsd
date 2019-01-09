@@ -615,7 +615,8 @@ write_objs(struct bsdar *bsdar)
 	size_t s_sz;		/* size of archive symbol table. */
 	size_t pm_sz;		/* size of pseudo members */
 	size_t w_sz;		/* size of words in symbol table */
-	int			 i, nr;
+	uint64_t		 nr;
+	int			 i;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		bsdar_errc(bsdar, EX_SOFTWARE, 0,
@@ -656,6 +657,9 @@ write_objs(struct bsdar *bsdar)
 	 * absolute_offset = htobe32(relative_offset + size_of_pseudo_members)
 	 */
 
+	w_sz = sizeof(uint32_t);
+	if (bsdar->s_so_max > UINT32_MAX)
+		w_sz = sizeof(uint64_t);
 	if (bsdar->s_cnt != 0) {
 		s_sz = (bsdar->s_cnt + 1) * sizeof(uint32_t) + bsdar->s_sn_sz;
 		pm_sz = _ARMAG_LEN + (_ARHDR_LEN + s_sz);
@@ -671,7 +675,7 @@ write_objs(struct bsdar *bsdar)
 
 		for (i = 0; (size_t)i < bsdar->s_cnt; i++) {
 			if (w_sz == sizeof(uint32_t))
-				*(bsdar->s_so + i) = (uint64_t)htobe32(*(uint32_t *)(bsdar->s_so + i) +
+				*(bsdar->s_so + i) = (uint64_t)htobe32((uint32_t)(*(bsdar->s_so + i)) +
 				    pm_sz);
 			else
 				*(bsdar->s_so + i) = htobe64(*(bsdar->s_so + i) +
@@ -704,10 +708,13 @@ write_objs(struct bsdar *bsdar)
 		if ((bsdar->options & AR_D) == 0)
 			archive_entry_set_mtime(entry, time(NULL), 0);
 		archive_entry_set_size(entry, (bsdar->s_cnt + 1) *
-		    sizeof(uint32_t) + bsdar->s_sn_sz);
+		    w_sz + bsdar->s_sn_sz);
 		AC(archive_write_header(a, entry));
-		nr = htobe32(bsdar->s_cnt);
-		write_data(bsdar, a, &nr, sizeof(uint32_t));
+		if(w_sz == sizeof(uint32_t))
+			nr = (uint64_t)htobe32((uint32_t)bsdar->s_cnt);
+		else
+			nr = htobe64(bsdar->s_cnt);
+		write_data(bsdar, a, &nr, w_sz);
 		if(w_sz == sizeof(uint64_t))
 			write_data(bsdar, a, bsdar->s_so, sizeof(uint64_t) *
 			    bsdar->s_cnt);

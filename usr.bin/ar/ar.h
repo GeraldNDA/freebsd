@@ -100,7 +100,7 @@ struct bsdar {
 	/*
 	 * Fields for the archive symbol table.
 	 */
-	uint32_t	  s_cnt;	/* current number of symbols. */
+	uint64_t	  s_cnt;	/* current number of symbols. */
 	uint64_t	 *s_so;		/* symbol offset table. */
 	uint64_t	  s_so_max;     /* Maximum symbol offset (for determining which ar format to use)*/
 	size_t		  s_so_cap;	/* capacity of so table buffer. */
