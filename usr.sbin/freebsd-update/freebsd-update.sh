@@ -516,9 +516,9 @@ parse_conffile () {
 	# If a configuration file was specified on the command line, check
 	# that it exists and is readable.
 	if [ ! -z "${CONFFILE}" ] && [ ! -r "${CONFFILE}" ]; then
-		echo -n "File does not exist "
-		echo -n "or is not readable: "
-		echo ${CONFFILE}
+		echo -n "File does not exist " >&2
+		echo -n "or is not readable: " >&2
+		echo ${CONFFILE} >&2
 		exit 1
 	fi
 
@@ -544,8 +544,8 @@ parse_conffile () {
 		L=$(($L + 1))
 		LINEX=`echo "${LINE}" | cut -f 1 -d '#'`
 		if ! configline ${LINEX}; then
-			echo "Error processing configuration file, line $L:"
-			echo "==> ${LINE}"
+			echo "Error processing configuration file, line $L:" >&2
+			echo "==> ${LINE}" >&2
 			exit 1
 		fi
 	done < ${CONFFILE}
@@ -625,31 +625,31 @@ fetchupgrade_check_params () {
 	_WORKDIR_bad2="Directory is not on a persistent filesystem: "
 
 	if [ -z "${SERVERNAME}" ]; then
-		echo -n "`basename $0`: "
-		echo "${_SERVERNAME_z}"
+		echo -n "`basename $0`: " >&2
+		echo "${_SERVERNAME_z}" >&2
 		exit 1
 	fi
 	if [ -z "${KEYPRINT}" ]; then
-		echo -n "`basename $0`: "
-		echo "${_KEYPRINT_z}"
+		echo -n "`basename $0`: " >&2
+		echo "${_KEYPRINT_z}" >&2
 		exit 1
 	fi
 	if ! echo "${KEYPRINT}" | grep -qE "^[0-9a-f]{64}$"; then
-		echo -n "`basename $0`: "
-		echo -n "${_KEYPRINT_bad}"
-		echo ${KEYPRINT}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_KEYPRINT_bad}" >&2
+		echo ${KEYPRINT} >&2
 		exit 1
 	fi
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: "
-		echo -n "${_WORKDIR_bad}"
-		echo ${WORKDIR}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_WORKDIR_bad}" >&2
+		echo ${WORKDIR} >&2
 		exit 1
 	fi
 	case `df -T ${WORKDIR}` in */dev/md[0-9]* | *tmpfs*)
-		echo -n "`basename $0`: "
-		echo -n "${_WORKDIR_bad2}"
-		echo ${WORKDIR}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_WORKDIR_bad2}" >&2
+		echo ${WORKDIR} >&2
 		exit 1
 		;;
 	esac
@@ -683,7 +683,7 @@ fetchupgrade_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel"
+		echo "Cannot identify running kernel" >&2
 		exit 1
 	fi
 
@@ -722,17 +722,17 @@ fetch_check_params () {
 	fetchupgrade_check_params
 
 	if ! [ -z "${TARGETRELEASE}" ]; then
-		echo -n "`basename $0`: "
-		echo -n "-r option is meaningless with 'fetch' command.  "
-		echo "(Did you mean 'upgrade' instead?)"
+		echo -n "`basename $0`: " >&2
+		echo -n "-r option is meaningless with 'fetch' command.  " >&2
+		echo "(Did you mean 'upgrade' instead?)" >&2
 		exit 1
 	fi
 
 	# Check that we have updates ready to install
 	if [ -f ${BDHASH}-install/kerneldone -a $FORCEFETCH -eq 0 ]; then
-		echo "You have a partially completed upgrade pending"
-		echo "Run '$0 install' first."
-		echo "Run '$0 fetch -F' to proceed anyway."
+		echo "You have a partially completed upgrade pending" >&2
+		echo "Run '$0 install' first." >&2
+		echo "Run '$0 fetch -F' to proceed anyway." >&2
 		exit 1
 	fi
 }
@@ -747,15 +747,15 @@ upgrade_check_params () {
 	# We need TARGETRELEASE set
 	_TARGETRELEASE_z="Release target must be specified via -r option."
 	if [ -z "${TARGETRELEASE}" ]; then
-		echo -n "`basename $0`: "
-		echo "${_TARGETRELEASE_z}"
+		echo -n "`basename $0`: " >&2
+		echo "${_TARGETRELEASE_z}" >&2
 		exit 1
 	fi
 
 	# The target release should be != the current release.
 	if [ "${TARGETRELEASE}" = "${RELNUM}" ]; then
-		echo -n "`basename $0`: "
-		echo "Cannot upgrade from ${RELNUM} to itself"
+		echo -n "`basename $0`: " >&2
+		echo "Cannot upgrade from ${RELNUM} to itself" >&2
 		exit 1
 	fi
 
@@ -782,23 +782,23 @@ upgrade_check_params () {
 install_check_params () {
 	# Check that we are root.  All sorts of things won't work otherwise.
 	if [ `id -u` != 0 ]; then
-		echo "You must be root to run this."
+		echo "You must be root to run this." >&2
 		exit 1
 	fi
 
 	# Check that securelevel <= 0.  Otherwise we can't update schg files.
 	if [ `sysctl -n kern.securelevel` -gt 0 ]; then
-		echo "Updates cannot be installed when the system securelevel"
-		echo "is greater than zero."
+		echo "Updates cannot be installed when the system securelevel" >&2
+		echo "is greater than zero." >&2
 		exit 1
 	fi
 
 	# Check that we have a working directory
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: "
-		echo -n "${_WORKDIR_bad}"
-		echo ${WORKDIR}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_WORKDIR_bad}" >&2
+		echo ${WORKDIR} >&2
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -816,8 +816,8 @@ install_check_params () {
 	fi
 	if ! [ -f ${BDHASH}-install/INDEX-OLD ] ||
 	    ! [ -f ${BDHASH}-install/INDEX-NEW ]; then
-		echo "Update manifest is corrupt -- this should never happen."
-		echo "Re-run '$0 fetch'."
+		echo "Update manifest is corrupt -- this should never happen." >&2
+		echo "Re-run '$0 fetch'." >&2
 		exit 1
 	fi
 
@@ -825,7 +825,7 @@ install_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel"
+		echo "Cannot identify running kernel" >&2
 		exit 1
 	fi
 }
@@ -835,16 +835,16 @@ install_check_params () {
 rollback_check_params () {
 	# Check that we are root.  All sorts of things won't work otherwise.
 	if [ `id -u` != 0 ]; then
-		echo "You must be root to run this."
+		echo "You must be root to run this." >&2
 		exit 1
 	fi
 
 	# Check that we have a working directory
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: "
-		echo -n "${_WORKDIR_bad}"
-		echo ${WORKDIR}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_WORKDIR_bad}" >&2
+		echo ${WORKDIR} >&2
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -854,12 +854,12 @@ rollback_check_params () {
 
 	# Check that we have updates ready to rollback
 	if ! [ -L ${BDHASH}-rollback ]; then
-		echo "No rollback directory found."
+		echo "No rollback directory found." >&2
 		exit 1
 	fi
 	if ! [ -f ${BDHASH}-rollback/INDEX-OLD ] ||
 	    ! [ -f ${BDHASH}-rollback/INDEX-NEW ]; then
-		echo "Update manifest is corrupt -- this should never happen."
+		echo "Update manifest is corrupt -- this should never happen." >&2
 		exit 1
 	fi
 }
@@ -881,25 +881,25 @@ IDS_check_params () {
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 
 	if [ -z "${SERVERNAME}" ]; then
-		echo -n "`basename $0`: "
-		echo "${_SERVERNAME_z}"
+		echo -n "`basename $0`: " >&2
+		echo "${_SERVERNAME_z}" >&2
 		exit 1
 	fi
 	if [ -z "${KEYPRINT}" ]; then
-		echo -n "`basename $0`: "
-		echo "${_KEYPRINT_z}"
+		echo -n "`basename $0`: " >&2
+		echo "${_KEYPRINT_z}" >&2
 		exit 1
 	fi
 	if ! echo "${KEYPRINT}" | grep -qE "^[0-9a-f]{64}$"; then
-		echo -n "`basename $0`: "
-		echo -n "${_KEYPRINT_bad}"
-		echo ${KEYPRINT}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_KEYPRINT_bad}" >&2
+		echo ${KEYPRINT} >&2
 		exit 1
 	fi
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: "
-		echo -n "${_WORKDIR_bad}"
-		echo ${WORKDIR}
+		echo -n "`basename $0`: " >&2
+		echo -n "${_WORKDIR_bad}" >&2
+		echo ${WORKDIR} >&2
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -919,7 +919,7 @@ IDS_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel"
+		echo "Cannot identify running kernel" >&2
 		exit 1
 	fi
 
@@ -2713,7 +2713,7 @@ backup_kernel_finddir () {
 		# the end and try again.
 		CNT=$((CNT + 1))
 		if [ $CNT -gt 9 ]; then
-			echo "Could not find valid backup dir ($BASEDIR/$BACKUPKERNELDIR)"
+			echo "Could not find valid backup dir ($BASEDIR/$BACKUPKERNELDIR)" >&2
 			exit 1
 		fi
 		BACKUPKERNELDIR="`echo $BACKUPKERNELDIR | sed -Ee 's/[0-9]\$//'`"
@@ -2752,7 +2752,7 @@ backup_kernel () {
 	# Mark the directory as having been created by freebsd-update.
 	touch $BASEDIR/$BACKUPKERNELDIR/.freebsd-update
 	if [ $? -ne 0 ]; then
-		echo "Could not create kernel backup directory"
+		echo "Could not create kernel backup directory" >&2
 		exit 1
 	fi
 
@@ -3262,9 +3262,9 @@ get_params () {
 # interactively, then run fetch_check_params and fetch_run
 cmd_fetch () {
 	if [ ! -t 0 -a $NOTTYOK -eq 0 ]; then
-		echo -n "`basename $0` fetch should not "
-		echo "be run non-interactively."
-		echo "Run `basename $0` cron instead."
+		echo -n "`basename $0` fetch should not " >&2
+		echo "be run non-interactively." >&2
+		echo "Run `basename $0` cron instead." >&2
 		exit 1
 	fi
 	fetch_check_params
