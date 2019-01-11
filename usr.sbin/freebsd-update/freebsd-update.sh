@@ -2898,8 +2898,9 @@ Kernel updates have been installed.  Please reboot and run
 
 		# Rebuild /etc/spwd.db and /etc/pwd.db if necessary.
 		if [ ${BASEDIR}/etc/master.passwd -nt ${BASEDIR}/etc/spwd.db ] ||
-		    [ ${BASEDIR}/etc/master.passwd -nt ${BASEDIR}/etc/pwd.db ]; then
-			pwd_mkdb -d ${BASEDIR}/etc ${BASEDIR}/etc/master.passwd
+		    [ ${BASEDIR}/etc/master.passwd -nt ${BASEDIR}/etc/pwd.db ] ||
+		    [ ${BASEDIR}/etc/master.passwd -nt ${BASEDIR}/etc/passwd ]; then
+			pwd_mkdb -d ${BASEDIR}/etc -p ${BASEDIR}/etc/master.passwd
 		fi
 
 		# Rebuild /etc/login.conf.db if necessary.
