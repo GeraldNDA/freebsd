@@ -2977,6 +2977,15 @@ install_setup_rollback () {
 
 # Actually install updates
 install_run () {
+	if [ mount -p |
+	    sed -E "s,[[:blank:]]+, ,g" |
+	    cut -d' ' -f 2,4  |
+	    grep -E '/(usr)?' |
+	    grep -vqE 'rw$' ]
+		echo -n "Either '/' or '/usr' "
+		echo "are not mounted with read-write permissions."
+		return 1
+	fi
 	echo -n "Installing updates..."
 
 	# Make sure we have all the files we should have
