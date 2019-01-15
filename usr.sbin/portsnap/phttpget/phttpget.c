@@ -45,12 +45,13 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
+#include <fetch.h>
 
-static const char *	env_HTTP_PROXY;
+static const char 	env_HTTP_PROXY[MAXHOSTNAMELEN+1];
 static char *		env_HTTP_PROXY_AUTH;
 static const char *	env_HTTP_USER_AGENT;
 static char *		env_HTTP_TIMEOUT;
-static const char *	proxyport;
+static const char	proxyport[URL_SCHEMELEN+1];
 static char *		proxyauth;
 
 static struct timeval	timo = { 15, 0};
@@ -106,7 +107,7 @@ b64enc(const char *ptext)
 
 		/* Write 4 bytes */
 		for (j = 0; j < 4; j++) {
-			if (j <= ptlen + 1)
+			if (j <= ptlen)
 				pc[j] = base64[(t >> 18) & 0x3f];
 			else
 				pc[j] = '=';
@@ -128,23 +129,7 @@ readenv(void)
 	char *proxy_auth_user = NULL;
 	char *proxy_auth_pass = NULL;
 	long http_timeout;
-
-	env_HTTP_PROXY = getenv("HTTP_PROXY");
-	if (env_HTTP_PROXY == NULL)
-		env_HTTP_PROXY = getenv("http_proxy");
-	if (env_HTTP_PROXY != NULL) {
-		if (strncmp(env_HTTP_PROXY, "http://", 7) == 0)
-			env_HTTP_PROXY += 7;
-		p = strchr(env_HTTP_PROXY, '/');
-		if (p != NULL)
-			*p = 0;
-		p = strchr(env_HTTP_PROXY, ':');
-		if (p != NULL) {
-			*p = 0;
-			proxyport = p + 1;
-		} else
-			proxyport = "3128";
-	}
+	struct url *proxy_url = NULL;
 
 	env_HTTP_PROXY_AUTH = getenv("HTTP_PROXY_AUTH");
 	if ((env_HTTP_PROXY != NULL) &&
@@ -159,6 +144,21 @@ readenv(void)
 		/* Obtain username and password */
 		proxy_auth_user = strsep(&env_HTTP_PROXY_AUTH, ":");
 		proxy_auth_pass = env_HTTP_PROXY_AUTH;
+	}
+
+	p = getenv("HTTP_PROXY");
+	if (p == NULL)
+		p = getenv("http_proxy");
+	if(p != NULL)
+		proxy_url = fetchParseURL(p);
+	if (proxy_url != NULL) {
+		if (proxy_url->port == 0)
+			proxy_url->port = 3183;
+		sprintf(env_HTTP_PROXY, "%s", proxy_url->host);
+		sprintf(proxyport, "%d", proxy_url->port);
+		/* Overrides HTTP_PROXY_AUTH */
+		proxy_auth_user = proxy_url->user;
+		proxy_auth_pass = proxy_url->pass;
 	}
 
 	if ((proxy_auth_user != NULL) && (proxy_auth_pass != NULL)) {
@@ -180,6 +180,9 @@ readenv(void)
 		free(proxy_auth_userpass64);
 	} else
 		proxyauth = NULL;
+
+	if (proxy_url != NULL)
+		fetchFreeURL(proxy_url);
 
 	env_HTTP_USER_AGENT = getenv("HTTP_USER_AGENT");
 	if (env_HTTP_USER_AGENT == NULL)
