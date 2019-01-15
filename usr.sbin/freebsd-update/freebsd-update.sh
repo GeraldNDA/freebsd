@@ -2628,6 +2628,32 @@ upgrade_run () {
 	echo "To install the downloaded upgrades, run \"$0 install\"."
 }
 
+# Perform system sanity checks to ensure
+# the file system can be modified as expected
+install_verify_system () {
+	# Verify there are read-write permissions on / and /usr
+	if mount -p |
+	    sed -E "s,[[:blank:]]+, ,g" |
+	    cut -d' ' -f 2,4  |
+	    grep -E '^/(usr)? ' |
+	    grep -vqE 'rw$'; then
+		echo -n "Either '/' or '/usr' "
+		echo "are not mounted with read-write permissions."
+		return 1
+	fi
+
+	# Ensure that the file system supports chflags
+	touch "${BASEDIR}/chflags_test"
+	if ! chflags 0 "${BASEDIR}/chflags_test"; then
+		echo "chflags is not supported on the file system of ${BASEDIR}."
+		echo -n "If an NFS filesystem is being used, "
+		echo "update on the source file system and then export it."
+		rm -f "${BASEDIR}/chflags_test"
+		return 1
+	fi
+	rm -f "${BASEDIR}/chflags_test"
+}
+
 # Make sure that all the file hashes mentioned in $@ have corresponding
 # gzipped files stored in /files/.
 install_verify () {
@@ -2977,16 +3003,9 @@ install_setup_rollback () {
 
 # Actually install updates
 install_run () {
-	if [ mount -p |
-	    sed -E "s,[[:blank:]]+, ,g" |
-	    cut -d' ' -f 2,4  |
-	    grep -E '/(usr)?' |
-	    grep -vqE 'rw$' ]
-		echo -n "Either '/' or '/usr' "
-		echo "are not mounted with read-write permissions."
-		return 1
-	fi
 	echo -n "Installing updates..."
+	# Make sure the system is configured correctly
+	install_verify_system || return 1
 
 	# Make sure we have all the files we should have
 	install_verify ${BDHASH}-install/INDEX-OLD	\
@@ -3077,6 +3096,9 @@ rollback_run () {
 		rm -r ${BDHASH}-install/
 		rm ${BDHASH}-install
 	fi
+
+	# Make sure the system is configured correctly
+	install_verify_system || return 1
 
 	# Make sure we have all the files we should have
 	install_verify ${BDHASH}-rollback/INDEX-NEW	\
