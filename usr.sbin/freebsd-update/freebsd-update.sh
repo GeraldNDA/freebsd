@@ -52,6 +52,7 @@ Options:
                   (default: update.FreeBSD.org)
   -t address   -- Mail output of cron command, if any, to address
                   (default: root)
+  -q           -- Hide any status related messages
   --not-running-from-cron
                -- Run without a tty, for use by automated tools
   --currently-running release
@@ -322,6 +323,9 @@ config_VerboseLevel () {
 		[Nn][Oo][Ss][Tt][Aa][Tt][Ss])
 			VERBOSELEVEL=nostats
 			;;
+		[Nn][Oo][Nn][Ee])
+			VERBOSELEVEL=none
+			;;
 		[Ss][Tt][Aa][Tt][Ss])
 			VERBOSELEVEL=stats
 			;;
@@ -484,7 +488,10 @@ parse_cmdline () {
 			config_VerboseLevel $1 || usage
 			;;
 
-		# Aliases for "-v debug" and "-v nostats"
+		# Aliases for "-v none", "-v debug" and "-v nostats"
+		-q)
+			config_VerboseLevel none || usage
+			;;
 		--debug)
 			config_VerboseLevel debug || usage
 			;;
@@ -582,22 +589,34 @@ default_params () {
 fetch_setup_verboselevel () {
 	case ${VERBOSELEVEL} in
 	debug)
+		INFOREDIR="/dev/stdout"
 		QUIETREDIR="/dev/stderr"
-		QUIETFLAG=" "
+		QUIETFLAG=""
 		STATSREDIR="/dev/stderr"
 		DDSTATS=".."
 		XARGST="-t"
 		NDEBUG=" "
 		;;
 	nostats)
-		QUIETREDIR=""
+		INFOREDIR="/dev/stdout"
+		QUIETREDIR="/dev/stdout"
 		QUIETFLAG=""
 		STATSREDIR="/dev/null"
 		DDSTATS=".."
 		XARGST=""
 		NDEBUG=""
 		;;
+	none)
+		INFOREDIR="/dev/null"
+		QUIETREDIR="/dev/null"
+		QUIETFLAG="-q"
+		STATSREDIR="/dev/null"
+		DDSTATS=".."
+		XARGST=""
+		NDEBUG=""
+		;;
 	stats)
+		INFOREDIR="/dev/stdout"
 		QUIETREDIR="/dev/null"
 		QUIETFLAG="-q"
 		STATSREDIR="/dev/stdout"
@@ -988,7 +1007,10 @@ fetch_pick_server_init () {
 
 # If no records, give up -- we'll just use the server name we were given.
 	if [ `wc -l < serverlist_full` -eq 0 ]; then
-		echo "none found."
+		if [ ${INFOREDIR} != "/dev/stdout" ]; then
+			echo "Looking up ${SERVERNAME} mirrors..." >&2
+		fi
+		echo "none found." >&2
 		return 1
 	fi
 
@@ -1015,7 +1037,7 @@ fetch_pick_server () {
 
 # Have we run out of mirrors?
 	if [ `wc -l < serverlist` -eq 0 ]; then
-		echo "No mirrors remaining, giving up."
+		echo "No mirrors remaining, giving up." >&2
 		return 1
 	fi
 
@@ -1123,13 +1145,19 @@ fetch_key () {
 	echo -n "Fetching public key from ${SERVERNAME}... "
 	rm -f pub.ssl
 	fetch ${QUIETFLAG} http://${SERVERNAME}/${FETCHDIR}/pub.ssl \
-	    2>${QUIETREDIR} || true
+	    2>${QUIETREDIR} >${INFOREDIR} || true
 	if ! [ -r pub.ssl ]; then
-		echo "failed."
+		if [ ${INFOREDIR} != "/dev/stdout" ]
+			echo -n "Fetching public key from ${SERVERNAME}... " >&2
+		fi
+		echo "failed." >&2
 		return 1
 	fi
 	if ! [ `${SHA256} -q pub.ssl` = ${KEYPRINT} ]; then
-		echo "key has incorrect hash."
+		if [ ${INFOREDIR} != "/dev/stdout" ]
+			echo -n "Fetching public key from ${SERVERNAME}... " >&2
+		fi
+		echo "key has incorrect hash." >&2
 		rm -f pub.ssl
 		return 1
 	fi
@@ -1161,7 +1189,6 @@ fetch_tag () {
 	fi
 
 	echo "done."
-
 	RELPATCHNUM=`cut -f 4 -d '|' < tag.new`
 	TINDEXHASH=`cut -f 5 -d '|' < tag.new`
 	EOLTIME=`cut -f 6 -d '|' < tag.new`
@@ -1392,13 +1419,19 @@ fetch_metadata () {
 
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
-				echo "failed."
+				if [ ${INFOREDIR} != "/dev/stdout" ]
+					echo -n "Fetching metadata files ..." >&2
+				fi
+				echo "failed." >&2
 				return 1
 			fi
 			if [ `gunzip -c < ${Y}.gz |
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
+				if [ ${INFOREDIR} != "/dev/stdout" ]
+					echo -n "Fetching metadata files ..." >&2
+				fi
 				echo "metadata is corrupt."
 				return 1
 			fi
@@ -1781,6 +1814,9 @@ fetch_files_premerge () {
 		# Make sure we got them all, and move them into /files/
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
+				if [ ${INFOREDIR} != "/dev/stdout" ]; then
+					echo -n "Fetching files from ${OLDRELNUM} for merging... " >&2
+				fi
 				echo "failed."
 				return 1
 			fi
@@ -1788,7 +1824,10 @@ fetch_files_premerge () {
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
-				echo "${Y} has incorrect hash."
+				if [ ${INFOREDIR} != "/dev/stdout" ]; then
+					echo -n "Fetching files from ${OLDRELNUM} for merging... " >&2
+				fi
+				echo "${Y} has incorrect hash." >&2
 				return 1
 			fi
 		done < filelist
@@ -1843,7 +1882,7 @@ fetch_files_prepare () {
 		cp "${BASEDIR}/${F}" tmpfile
 		if [ `sha256 -q tmpfile` != ${HASH} ]; then
 			echo
-			echo "File changed while FreeBSD Update running: ${F}"
+			echo "File changed while FreeBSD Update running: ${F}" >&2
 			return 1
 		fi
 
@@ -1913,14 +1952,20 @@ fetch_files () {
 
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
-				echo "failed."
+				if [ ${INFOREDIR} != "/dev/stdout" ]; then
+					echo -n "Fetching files... " >&2
+				fi
+				echo "failed." >&2
 				return 1
 			fi
 			if [ `gunzip -c < ${Y}.gz |
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
-				echo "${Y} has incorrect hash."
+				if [ ${INFOREDIR} != "/dev/stdout" ]; then
+					echo -n "Fetching files... " >&2
+				fi
+				echo "${Y} has incorrect hash." >&2
 				return 1
 			fi
 		done < filelist
@@ -1943,10 +1988,10 @@ fetch_create_manifest () {
 	# Report to the user if any updates were avoided due to local changes
 	if [ -s modifiedfiles ]; then
 		echo
-		echo -n "The following files are affected by updates, "
-		echo "but no changes have"
-		echo -n "been downloaded because the files have been "
-		echo "modified locally:"
+		echo -n "The following files are affected by updates, " >&2
+		echo "but no changes have" >&2
+		echo -n "been downloaded because the files have been " >&2
+		echo "modified locally:" >&2
 		cat modifiedfiles
 	fi | $PAGER
 	rm modifiedfiles
@@ -1956,8 +2001,8 @@ fetch_create_manifest () {
 	    ! [ -s INDEX-NEW ]; then
 		rm INDEX-PRESENT INDEX-NEW
 		echo
-		echo -n "No updates needed to update system to "
-		echo "${RELNUM}-p${RELPATCHNUM}."
+		echo -n "No updates needed to update system to " >&2
+		echo "${RELNUM}-p${RELPATCHNUM}." >&2
 		return
 	fi
 
@@ -1975,8 +2020,8 @@ fetch_create_manifest () {
 	# Report removed files, if any
 	if [ -s files.removed ]; then
 		echo
-		echo -n "The following files will be removed "
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
+		echo -n "The following files will be removed " >&2
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
 		cat files.removed
 	fi | $PAGER
 	rm files.removed
@@ -1984,8 +2029,8 @@ fetch_create_manifest () {
 	# Report added files, if any
 	if [ -s files.added ]; then
 		echo
-		echo -n "The following files will be added "
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
+		echo -n "The following files will be added " >&2
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
 		cat files.added
 	fi | $PAGER
 	rm files.added
@@ -1993,8 +2038,8 @@ fetch_create_manifest () {
 	# Report updated files, if any
 	if [ -s files.updated ]; then
 		echo
-		echo -n "The following files will be updated "
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
+		echo -n "The following files will be updated " >&2
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
 
 		cat files.updated
 	fi | $PAGER
@@ -2026,7 +2071,7 @@ fetch_warn_eol () {
 	# If the EoL time is past, warn.
 	if [ ${EOLTIME} -lt ${NOWTIME} ]; then
 		echo
-		cat <<-EOF
+		cat <<-EOF >&2
 		WARNING: `uname -sr` HAS PASSED ITS END-OF-LIFE DATE.
 		Any security issues discovered after `date -r ${EOLTIME}`
 		will not have been corrected.
@@ -2070,7 +2115,7 @@ fetch_warn_eol () {
 
 	# Print the warning
 	echo
-	cat <<-EOF
+	cat <<-EOF >&2
 		WARNING: `uname -sr` is approaching its End-of-Life date.
 		It is strongly recommended that you upgrade to a newer
 		release within the next ${NUM} ${UNIT}.
@@ -3136,7 +3181,7 @@ IDS_compare () {
 	while read FPATH TYPE OWNER GROUP PERM HASH LINK P_TYPE P_OWNER P_GROUP P_PERM P_HASH P_LINK; do
 		# Warn about different object types.
 		if ! [ "${TYPE}" = "${P_TYPE}" ]; then
-			echo -n "${FPATH} is a "
+			echo -n "${FPATH} is a " >&2
 			case "${P_TYPE}" in
 			f)	echo -n "regular file, "
 				;;
@@ -3198,7 +3243,7 @@ IDS_compare () {
 		# We don't warn about different hard links, since some
 		# some archivers break hard links, and as long as the
 		# underlying data is correct they really don't matter.
-	done < INDEX-NOTMATCHING
+	done >&2 < INDEX-NOTMATCHING
 
 	# Clean up
 	rm $1 $1.noflags $1.sorted $2 INDEX-NOTMATCHING
@@ -3215,7 +3260,7 @@ IDS_run () {
 	while ! fetch_key; do
 		fetch_pick_server || return 1
 	done
- 
+
 	# Try to fetch the metadata index signature ("tag") until we run
 	# out of available servers; and sanity check the downloaded tag.
 	while ! fetch_tag; do
@@ -3245,7 +3290,6 @@ IDS_run () {
 	# Compare INDEX-ALL and INDEX-PRESENT and print warnings about any
 	# differences.
 	IDS_compare INDEX-ALL INDEX-PRESENT
-}
 
 #### Main functions -- call parameter-handling and core functions
 
@@ -3268,7 +3312,7 @@ cmd_fetch () {
 		exit 1
 	fi
 	fetch_check_params
-	fetch_run || exit 1
+	fetch_run > ${INFOREDIR} || exit 1
 	ISFETCHED=1
 }
 
@@ -3281,7 +3325,9 @@ cmd_cron () {
 	sleep `jot -r 1 0 3600`
 
 	TMPFILE=`mktemp /tmp/freebsd-update.XXXXXX` || exit 1
-	if ! fetch_run >> ${TMPFILE} ||
+	mkfifo _fetch_results
+	cat _fetch_results > ${INFOREDIR} | cat - >> ${TMPFILE} &
+	if ! fetch_run > _fetch_results ||
 	    ! grep -q "No updates needed" ${TMPFILE} ||
 	    [ ${VERBOSELEVEL} = "debug" ]; then
 		mail -s "`hostname` security updates" ${MAILTO} < ${TMPFILE}
@@ -3311,7 +3357,7 @@ cmd_rollback () {
 # Compare system against a "known good" index.
 cmd_IDS () {
 	IDS_check_params
-	IDS_run || exit 1
+	IDS_run > ${INFOREDIR} || exit 1
 }
 
 #### Entry point

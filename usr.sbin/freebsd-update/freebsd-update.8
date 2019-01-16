@@ -41,6 +41,7 @@
 .Op Fl r Ar newrelease
 .Op Fl s Ar server
 .Op Fl t Ar address
+.Op Fl q
 .Op Fl -not-running-from-cron
 .Cm command ...
 .Sh DESCRIPTION
@@ -104,6 +105,8 @@ Mail output of
 command, if any, to
 .Ar address .
 (default: root, or as given in the configuration file.)
+.It Fl q
+Hide any status related messages
 .It Fl -not-running-from-cron
 Force
 .Nm Cm fetch
