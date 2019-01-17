@@ -668,16 +668,18 @@ fetchupgrade_check_params () {
 	PATCHDIR=${RELNUM}/${ARCH}/bp
 
 	# Disallow upgrade from a version that is not `-RELEASE`
-	if ! echo "${RELNUM}" | grep -qE -- "-RELEASE$"; then
+	case ${RELNUM} in *-RELEASE | *-BETA* | *-RC* )
 		echo -n "`basename $0`: "
 		cat  <<- EOF
-			Cannot upgrade from a version that is not a '-RELEASE' using `basename $0`. 
-			Instead, FreeBSD can be directly upgraded by source or upgraded to a 
-			RELEASE/RELENG version prior to running `basename $0`.
+			Cannot upgrade from a version that is none of '-RELEASE', '-BETA'
+			or '-RC' using `basename $0`. Instead, FreeBSD can be directly
+			upgraded by source or upgraded to a RELEASE/RELENG version
+			prior to running `basename $0`.
 		EOF
 		echo "System version: ${RELNUM}"
 		exit 1
-	fi
+		;;
+	esac
 
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
