@@ -682,7 +682,8 @@ fetchupgrade_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	if ! [ -d ${KERNELDIR} ]; then
+	ISJAILED=`sysctl -n security.jail.jailed`
+	if ! [ -d ${KERNELDIR} ] && [ ${ISJAILED} -eq 0 ]; then
 		echo "Cannot identify running kernel"
 		exit 1
 	fi
@@ -824,7 +825,8 @@ install_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	if ! [ -d ${KERNELDIR} ]; then
+	ISJAILED=`sysctl -n security.jail.jailed`
+	if ! [ -d ${KERNELDIR} ] && [ ${ISJAILED} -eq 0 ]; then
 		echo "Cannot identify running kernel"
 		exit 1
 	fi
@@ -918,7 +920,8 @@ IDS_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	if ! [ -d ${KERNELDIR} ]; then
+	ISJAILED=`sysctl -n security.jail.jailed`
+	if ! [ -d ${KERNELDIR} ] && [ ${ISJAILED} -eq 0 ]; then
 		echo "Cannot identify running kernel"
 		exit 1
 	fi
@@ -2108,9 +2111,12 @@ fetch_run () {
 	fetch_filter_metadata INDEX-NEW || return 1
 	fetch_filter_metadata INDEX-OLD || return 1
 
-	# Translate /boot/${KERNCONF} into ${KERNELDIR}
-	fetch_filter_kernel_names INDEX-NEW ${KERNCONF}
-	fetch_filter_kernel_names INDEX-OLD ${KERNCONF}
+	# If the update is being run from outside a jail then,
+	# translate /boot/${KERNCONF} into ${KERNELDIR}
+	if [ ${ISJAILED} -eq 0]; then
+		fetch_filter_kernel_names INDEX-NEW ${KERNCONF}
+		fetch_filter_kernel_names INDEX-OLD ${KERNCONF}
+	fi
 
 	# For all paths appearing in INDEX-OLD or INDEX-NEW, inspect the
 	# system and generate an INDEX-PRESENT file.
@@ -2582,9 +2588,12 @@ upgrade_run () {
 	# INDEX-OLD and INDEX-NEW files (in the sense of normal upgrades).
 	upgrade_oldall_to_oldnew INDEX-OLD INDEX-ALL INDEX-NEW
 
-	# Translate /boot/${KERNCONF} or /boot/${NKERNCONF} into ${KERNELDIR}
-	fetch_filter_kernel_names INDEX-NEW ${NKERNCONF}
-	fetch_filter_kernel_names INDEX-OLD ${KERNCONF}
+	# If system is being updated outside of a jail then,
+	# translate /boot/${KERNCONF} or /boot/${NKERNCONF} into ${KERNELDIR}
+	if [ ${ISJAILED} -eq 0 ]; then
+		fetch_filter_kernel_names INDEX-NEW ${NKERNCONF}
+		fetch_filter_kernel_names INDEX-OLD ${KERNCONF}
+	fi
 
 	# For all paths appearing in INDEX-OLD or INDEX-NEW, inspect the
 	# system and generate an INDEX-PRESENT file.
@@ -2729,8 +2738,8 @@ backup_kernel_finddir () {
 # the unlikely case that the user has created a directory with a
 # conflicting name.
 backup_kernel () {
-	# Only make kernel backup is so configured.
-	if [ $BACKUPKERNEL != yes ]; then
+	# Only make kernel backup is so configured or outside of a jail.
+	if [ $BACKUPKERNEL != yes ] || [ ${ISJAILED} -ne 0 ]; then
 		return 0
 	fi
 
@@ -2767,7 +2776,7 @@ backup_kernel () {
 		FINDFILTER="-a ! -name *.debug -a ! -name *.symbols"
 	fi
 
-	# Backup all the kernel files using hardlinks.
+	# Backup all the kernel files using hardlinks if necessary.
 	(cd ${BASEDIR}/${KERNELDIR} && find . -type f $FINDFILTER -exec \
 	    cp -pl '{}' ${BASEDIR}/${BACKUPKERNELDIR}/'{}' \;)
 
