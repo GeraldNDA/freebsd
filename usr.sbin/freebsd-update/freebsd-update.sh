@@ -2738,7 +2738,7 @@ backup_kernel_finddir () {
 # the unlikely case that the user has created a directory with a
 # conflicting name.
 backup_kernel () {
-	# Only make kernel backup is so configured or outside of a jail.
+	# Only make kernel backup if so configured or outside of a jail.
 	if [ $BACKUPKERNEL != yes ] || [ ${ISJAILED} -ne 0 ]; then
 		return 0
 	fi
