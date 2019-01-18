@@ -673,14 +673,14 @@ fetchupgrade_check_params () {
 			;;
 		*)
 			echo -n "`basename $0`: "
-			cat  <<- EOF
+			cat <<- EOF
 				Cannot upgrade from a version that is not a release
 				(including alpha, beta and release candidates)
 				using `basename $0`. Instead, FreeBSD can be directly
 				upgraded by source or upgraded to a RELEASE/RELENG version
-				 prior to running `basename $0`.
+				prior to running `basename $0`.
+				Currently running: ${RELNUM}
 			EOF
-			echo "System version: ${RELNUM}"
 			exit 1
 			;;
 	esac
