@@ -2631,27 +2631,30 @@ upgrade_run () {
 # Perform system sanity checks to ensure
 # the file system can be modified as expected
 install_verify_system () {
-	# Verify there are read-write permissions on / and /usr
-	if mount -p |
-	    sed -E "s,[[:blank:]]+, ,g" |
-	    cut -d' ' -f 2,4  |
-	    grep -E '^/(usr)? ' |
-	    grep -vqE 'rw$'; then
-		echo -n "Either '/' or '/usr' "
-		echo "are not mounted with read-write permissions."
-		return 1
-	fi
-
-	# Ensure that the file system supports chflags
-	touch "${BASEDIR}/chflags_test"
-	if ! chflags 0 "${BASEDIR}/chflags_test"; then
-		echo "chflags is not supported on the file system of ${BASEDIR}."
-		echo -n "If an NFS filesystem is being used, "
-		echo "update on the source file system and then export it."
-		rm -f "${BASEDIR}/chflags_test"
-		return 1
-	fi
-	rm -f "${BASEDIR}/chflags_test"
+	_IS_RW="*[[:space:]]rw[[:space:]]*"
+	_IS_NFS="*[[:space:]]nfs[[:space:]]*"
+	# Verify there are read-write permissions on required directories
+	for required_dir in / /usr /boot; do
+		mounted_dir=`df -T ${BASEDIR}/${required_dir} |
+		    sed -E 's,[[:blank:]]+, ,g' |
+		    cut -d' ' -f7`
+		case `mount -p ${mounted_dir}` in
+			$_IS_RW)
+				;;
+			$_IS_NFS)
+				echo -n "${BASEDIR}/${required_dir} "
+				echo -n "is on NFS (${mounted_dir}) "
+				echo "so chflags will not be supported."
+				echo "Update the source filesystem and then export it."
+				;;
+		   	*)
+				echo -n "${BASEDIR}/${required_dir} "
+				echo -n "is not on a file system (${mounted_dir}) mounted "
+				echo "with read-write permissions."
+				return 1
+				;;
+		esac
+	done
 }
 
 # Make sure that all the file hashes mentioned in $@ have corresponding
