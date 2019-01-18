@@ -30,10 +30,6 @@
 # $FreeBSD$
 
 #### Usage function -- called from command-line handling code.
-
-# Usage instructions.  Options not listed:
-# --debug	-- don't filter output from utilities
-# --no-stats	-- don't show progress statistics while fetching files
 usage () {
 	cat <<EOF
 usage: `basename $0` [options] command ... [path]
@@ -52,6 +48,12 @@ Options:
                   (default: update.FreeBSD.org)
   -t address   -- Mail output of cron command, if any, to address
                   (default: root)
+  -v verbosity -- Change the amout of information output during
+                  fetch or upgrade commands. Can be set to either
+                  debug, nostats, or stats
+                  (default: stat)
+  --debug      -- Don't filter output from utilities
+  --no-stats   -- Don't show progress statistics while fetching files
   --not-running-from-cron
                -- Run without a tty, for use by automated tools
   --currently-running release

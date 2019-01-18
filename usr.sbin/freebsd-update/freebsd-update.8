@@ -41,7 +41,11 @@
 .Op Fl r Ar newrelease
 .Op Fl s Ar server
 .Op Fl t Ar address
+.Op Fl v Ar verbosity
+.Op Fl -debug
+.Op Fl -no-stats
 .Op Fl -not-running-from-cron
+.Op Fl -currently-running Ar release
 .Cm command ...
 .Sh DESCRIPTION
 The
@@ -107,6 +111,25 @@ Mail output of
 command, if any, to
 .Ar address .
 (default: root, or as given in the configuration file.)
+.It Fl v Ar verbosity
+Change the amount of output when performing a
+.Nm Cm fetch
+or a
+.Nm Cm upgrade .
+Supported levels include: debug, nostats, stats. See
+.Fl -debug ,
+and
+.Fl -no-stats
+for more information. (default: stats)
+.It Fl -debug
+Alias for
+.Fl v Ar debug .
+Shows informational and warning messages from used utilities
+that are normally hidden.
+.It Fl -no-stats
+Alias for
+.Fl v Ar nostats .
+Hides progress when fetching files.
 .It Fl -not-running-from-cron
 Force
 .Nm Cm fetch
