@@ -518,14 +518,24 @@ parse_cmdline () {
 	fi
 }
 
+print_error () {
+	if [ $# -eq 0 ]; then
+		while read line; do
+			echo "${line}" >&2
+		done
+	else
+		echo $@ >&2
+	fi
+}
+
 # Parse the configuration file
 parse_conffile () {
 	# If a configuration file was specified on the command line, check
 	# that it exists and is readable.
 	if [ ! -z "${CONFFILE}" ] && [ ! -r "${CONFFILE}" ]; then
-		echo -n "File does not exist " >&2
-		echo -n "or is not readable: " >&2
-		echo ${CONFFILE} >&2
+		print_error -n "File does not exist "
+		print_error -n "or is not readable: "
+		print_error ${CONFFILE}
 		exit 1
 	fi
 
@@ -551,8 +561,8 @@ parse_conffile () {
 		L=$(($L + 1))
 		LINEX=`echo "${LINE}" | cut -f 1 -d '#'`
 		if ! configline ${LINEX}; then
-			echo "Error processing configuration file, line $L:" >&2
-			echo "==> ${LINE}" >&2
+			print_error "Error processing configuration file, line $L:"
+			print_error "==> ${LINE}"
 			exit 1
 		fi
 	done < ${CONFFILE}
@@ -644,31 +654,31 @@ fetchupgrade_check_params () {
 	_WORKDIR_bad2="Directory is not on a persistent filesystem: "
 
 	if [ -z "${SERVERNAME}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "${_SERVERNAME_z}" >&2
+		print_error -n "`basename $0`: "
+		print_error "${_SERVERNAME_z}"
 		exit 1
 	fi
 	if [ -z "${KEYPRINT}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "${_KEYPRINT_z}" >&2
+		print_error -n "`basename $0`: "
+		print_error "${_KEYPRINT_z}"
 		exit 1
 	fi
 	if ! echo "${KEYPRINT}" | grep -qE "^[0-9a-f]{64}$"; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_KEYPRINT_bad}" >&2
-		echo ${KEYPRINT} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_KEYPRINT_bad}"
+		print_error ${KEYPRINT}
 		exit 1
 	fi
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_WORKDIR_bad}" >&2
-		echo ${WORKDIR} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_WORKDIR_bad}"
+		print_error ${WORKDIR}
 		exit 1
 	fi
 	case `df -T ${WORKDIR}` in */dev/md[0-9]* | *tmpfs*)
-		echo -n "`basename $0`: " >&2
-		echo -n "${_WORKDIR_bad2}" >&2
-		echo ${WORKDIR} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_WORKDIR_bad2}"
+		print_error ${WORKDIR}
 		exit 1
 		;;
 	esac
@@ -702,7 +712,7 @@ fetchupgrade_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel" >&2
+		print_error "Cannot identify running kernel"
 		exit 1
 	fi
 
@@ -741,17 +751,17 @@ fetch_check_params () {
 	fetchupgrade_check_params
 
 	if ! [ -z "${TARGETRELEASE}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo -n "-r option is meaningless with 'fetch' command.  " >&2
-		echo "(Did you mean 'upgrade' instead?)" >&2
+		print_error -n "`basename $0`: "
+		print_error -n "-r option is meaningless with 'fetch' command. "
+		print_error "(Did you mean 'upgrade' instead?)"
 		exit 1
 	fi
 
 	# Check that we have updates ready to install
 	if [ -f ${BDHASH}-install/kerneldone -a $FORCEFETCH -eq 0 ]; then
-		echo "You have a partially completed upgrade pending" >&2
-		echo "Run '$0 install' first." >&2
-		echo "Run '$0 fetch -F' to proceed anyway." >&2
+		print_error "You have a partially completed upgrade pending"
+		print_error "Run '$0 install' first."
+		print_error "Run '$0 fetch -F' to proceed anyway."
 		exit 1
 	fi
 }
@@ -766,30 +776,30 @@ upgrade_check_params () {
 	# We need TARGETRELEASE set
 	_TARGETRELEASE_z="Release target must be specified via -r option."
 	if [ -z "${TARGETRELEASE}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "${_TARGETRELEASE_z}" >&2
+		print_error -n "`basename $0`: "
+		print_error "${_TARGETRELEASE_z}"
 		exit 1
 	fi
 
 	# The target release should be != the current release.
 	if [ "${TARGETRELEASE}" = "${RELNUM}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "Cannot upgrade from ${RELNUM} to itself" >&2
+		print_error -n "`basename $0`: "
+		print_error "Cannot upgrade from ${RELNUM} to itself"
 		exit 1
 	fi
 
 	# Turning off AllowAdd or AllowDelete is a bad idea for upgrades.
 	if [ "${ALLOWADD}" = "no" ]; then
-		echo -n "`basename $0`: "
-		echo -n "WARNING: \"AllowAdd no\" is a bad idea "
-		echo "when upgrading between releases."
-		echo
+		print_error -n "`basename $0`: "
+		print_error -n "WARNING: \"AllowAdd no\" is a bad idea "
+		print_error "when upgrading between releases."
+		print_error
 	fi
 	if [ "${ALLOWDELETE}" = "no" ]; then
-		echo -n "`basename $0`: "
-		echo -n "WARNING: \"AllowDelete no\" is a bad idea "
-		echo "when upgrading between releases."
-		echo
+		print_error -n "`basename $0`: "
+		print_error -n "WARNING: \"AllowDelete no\" is a bad idea "
+		print_error "when upgrading between releases."
+		print_error
 	fi
 
 	# Set EDITOR to /usr/bin/vi if it isn't already set
@@ -801,23 +811,23 @@ upgrade_check_params () {
 install_check_params () {
 	# Check that we are root.  All sorts of things won't work otherwise.
 	if [ `id -u` != 0 ]; then
-		echo "You must be root to run this." >&2
+		print_error "You must be root to run this."
 		exit 1
 	fi
 
 	# Check that securelevel <= 0.  Otherwise we can't update schg files.
 	if [ `sysctl -n kern.securelevel` -gt 0 ]; then
-		echo "Updates cannot be installed when the system securelevel" >&2
-		echo "is greater than zero." >&2
+		print_error "Updates cannot be installed when the system securelevel"
+		print_error "is greater than zero."
 		exit 1
 	fi
 
 	# Check that we have a working directory
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_WORKDIR_bad}" >&2
-		echo ${WORKDIR} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_WORKDIR_bad}"
+		print_error ${WORKDIR}
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -835,8 +845,8 @@ install_check_params () {
 	fi
 	if ! [ -f ${BDHASH}-install/INDEX-OLD ] ||
 	    ! [ -f ${BDHASH}-install/INDEX-NEW ]; then
-		echo "Update manifest is corrupt -- this should never happen." >&2
-		echo "Re-run '$0 fetch'." >&2
+		print_error "Update manifest is corrupt -- this should never happen."
+		print_error "Re-run '$0 fetch'."
 		exit 1
 	fi
 
@@ -844,7 +854,7 @@ install_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel" >&2
+		print_error "Cannot identify running kernel"
 		exit 1
 	fi
 }
@@ -854,16 +864,16 @@ install_check_params () {
 rollback_check_params () {
 	# Check that we are root.  All sorts of things won't work otherwise.
 	if [ `id -u` != 0 ]; then
-		echo "You must be root to run this." >&2
+		print_error "You must be root to run this."
 		exit 1
 	fi
 
 	# Check that we have a working directory
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_WORKDIR_bad}" >&2
-		echo ${WORKDIR} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_WORKDIR_bad}"
+		print_error ${WORKDIR}
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -873,12 +883,12 @@ rollback_check_params () {
 
 	# Check that we have updates ready to rollback
 	if ! [ -L ${BDHASH}-rollback ]; then
-		echo "No rollback directory found." >&2
+		print_error "No rollback directory found."
 		exit 1
 	fi
 	if ! [ -f ${BDHASH}-rollback/INDEX-OLD ] ||
 	    ! [ -f ${BDHASH}-rollback/INDEX-NEW ]; then
-		echo "Update manifest is corrupt -- this should never happen." >&2
+		print_error "Update manifest is corrupt -- this should never happen."
 		exit 1
 	fi
 }
@@ -900,25 +910,25 @@ IDS_check_params () {
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 
 	if [ -z "${SERVERNAME}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "${_SERVERNAME_z}" >&2
+		print_error -n "`basename $0`: "
+		print_error "${_SERVERNAME_z}"
 		exit 1
 	fi
 	if [ -z "${KEYPRINT}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo "${_KEYPRINT_z}" >&2
+		print_error -n "`basename $0`: "
+		print_error "${_KEYPRINT_z}"
 		exit 1
 	fi
 	if ! echo "${KEYPRINT}" | grep -qE "^[0-9a-f]{64}$"; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_KEYPRINT_bad}" >&2
-		echo ${KEYPRINT} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_KEYPRINT_bad}"
+		print_error ${KEYPRINT}
 		exit 1
 	fi
 	if ! [ -d "${WORKDIR}" -a -w "${WORKDIR}" ]; then
-		echo -n "`basename $0`: " >&2
-		echo -n "${_WORKDIR_bad}" >&2
-		echo ${WORKDIR} >&2
+		print_error -n "`basename $0`: "
+		print_error -n "${_WORKDIR_bad}"
+		print_error ${WORKDIR}
 		exit 1
 	fi
 	cd ${WORKDIR} || exit 1
@@ -938,7 +948,7 @@ IDS_check_params () {
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
 	if ! [ -d ${KERNELDIR} ]; then
-		echo "Cannot identify running kernel" >&2
+		print_error "Cannot identify running kernel"
 		exit 1
 	fi
 
@@ -1007,10 +1017,7 @@ fetch_pick_server_init () {
 
 # If no records, give up -- we'll just use the server name we were given.
 	if [ `wc -l < serverlist_full` -eq 0 ]; then
-		if [ ${INFOREDIR} != "/dev/stdout" ]; then
-			echo "Looking up ${SERVERNAME} mirrors..." >&2
-		fi
-		echo "none found." >&2
+		print_error "found no ${SERVERNAME} mirrors."
 		return 1
 	fi
 
@@ -1037,7 +1044,7 @@ fetch_pick_server () {
 
 # Have we run out of mirrors?
 	if [ `wc -l < serverlist` -eq 0 ]; then
-		echo "No mirrors remaining, giving up." >&2
+		print_error "No mirrors remaining, giving up."
 		return 1
 	fi
 
@@ -1147,17 +1154,11 @@ fetch_key () {
 	fetch ${QUIETFLAG} http://${SERVERNAME}/${FETCHDIR}/pub.ssl \
 	    2>${QUIETREDIR} >${INFOREDIR} || true
 	if ! [ -r pub.ssl ]; then
-		if [ ${INFOREDIR} != "/dev/stdout" ]
-			echo -n "Fetching public key from ${SERVERNAME}... " >&2
-		fi
-		echo "failed." >&2
+		print_error "failed to fetch public key from ${SERVERNAME}."
 		return 1
 	fi
 	if ! [ `${SHA256} -q pub.ssl` = ${KEYPRINT} ]; then
-		if [ ${INFOREDIR} != "/dev/stdout" ]
-			echo -n "Fetching public key from ${SERVERNAME}... " >&2
-		fi
-		echo "key has incorrect hash." >&2
+		print_error "public key from ${SERVERNAME} has incorrect hash."
 		rm -f pub.ssl
 		return 1
 	fi
@@ -1205,11 +1206,11 @@ fetch_tagsanity () {
 		RELPX=0
 	fi
 	if [ "${RELPATCHNUM}" -lt "${RELPX}" ]; then
-		echo
-		echo -n "Files on mirror (${RELNUM}-p${RELPATCHNUM})"
-		echo " appear older than what"
-		echo "we are currently running (`uname -r`)!"
-		echo "Cowardly refusing to proceed any further."
+		print_error
+		print_error -n "Files on mirror (${RELNUM}-p${RELPATCHNUM})"
+		print_error " appear older than what"
+		print_error "we are currently running (`uname -r`)!"
+		print_error "Cowardly refusing to proceed any further."
 		return 1
 	fi
 
@@ -1223,12 +1224,12 @@ fetch_tagsanity () {
 		LASTRELPATCHNUM=`cut -f 4 -d '|' < tag`
 
 		if [ "${RELPATCHNUM}" -lt "${LASTRELPATCHNUM}" ]; then
-			echo
-			echo -n "Files on mirror (${RELNUM}-p${RELPATCHNUM})"
-			echo " are older than the"
-			echo -n "most recently seen updates"
-			echo " (${RELNUM}-p${LASTRELPATCHNUM})."
-			echo "Cowardly refusing to proceed any further."
+			print_error
+			print_error -n "Files on mirror (${RELNUM}-p${RELPATCHNUM})"
+			print_error " are older than the"
+			print_error -n "most recently seen updates"
+			print_error " (${RELNUM}-p${LASTRELPATCHNUM})."
+			print_error "Cowardly refusing to proceed any further."
 			return 1
 		fi
 	fi
@@ -1253,10 +1254,10 @@ fetch_metadata_index () {
 
 # Print an error message about signed metadata being bogus.
 fetch_metadata_bogus () {
-	echo
-	echo "The update metadata$1 is correctly signed, but"
-	echo "failed an integrity check."
-	echo "Cowardly refusing to proceed any further."
+	print_error
+	print_error "The update metadata$1 is correctly signed, but"
+	print_error "failed an integrity check."
+	print_error "Cowardly refusing to proceed any further."
 	return 1
 }
 
@@ -1419,20 +1420,14 @@ fetch_metadata () {
 
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
-				if [ ${INFOREDIR} != "/dev/stdout" ]
-					echo -n "Fetching metadata files ..." >&2
-				fi
-				echo "failed." >&2
+				print_error "failed to fetch metadata files."
 				return 1
 			fi
 			if [ `gunzip -c < ${Y}.gz |
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
-				if [ ${INFOREDIR} != "/dev/stdout" ]
-					echo -n "Fetching metadata files ..." >&2
-				fi
-				echo "metadata is corrupt."
+				print_error "metadata is corrupt."
 				return 1
 			fi
 		done < filelist
@@ -1814,20 +1809,14 @@ fetch_files_premerge () {
 		# Make sure we got them all, and move them into /files/
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
-				if [ ${INFOREDIR} != "/dev/stdout" ]; then
-					echo -n "Fetching files from ${OLDRELNUM} for merging... " >&2
-				fi
-				echo "failed."
+				print_error "failed to fetch files from ${OLDRELNUM}."
 				return 1
 			fi
 			if [ `gunzip -c < ${Y}.gz |
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
-				if [ ${INFOREDIR} != "/dev/stdout" ]; then
-					echo -n "Fetching files from ${OLDRELNUM} for merging... " >&2
-				fi
-				echo "${Y} has incorrect hash." >&2
+				print_error "${Y} from ${OLDRELNUM} has incorrect hash."
 				return 1
 			fi
 		done < filelist
@@ -1881,8 +1870,8 @@ fetch_files_prepare () {
 		# Make sure the file hasn't changed.
 		cp "${BASEDIR}/${F}" tmpfile
 		if [ `sha256 -q tmpfile` != ${HASH} ]; then
-			echo
-			echo "File changed while FreeBSD Update running: ${F}" >&2
+			print_error
+			print_error "File changed while FreeBSD Update running: ${F}"
 			return 1
 		fi
 
@@ -1952,20 +1941,14 @@ fetch_files () {
 
 		while read Y; do
 			if ! [ -f ${Y}.gz ]; then
-				if [ ${INFOREDIR} != "/dev/stdout" ]; then
-					echo -n "Fetching files... " >&2
-				fi
-				echo "failed." >&2
+				print_error "failed to fetch files."
 				return 1
 			fi
 			if [ `gunzip -c < ${Y}.gz |
 			    ${SHA256} -q` = ${Y} ]; then
 				mv ${Y}.gz files/${Y}.gz
 			else
-				if [ ${INFOREDIR} != "/dev/stdout" ]; then
-					echo -n "Fetching files... " >&2
-				fi
-				echo "${Y} has incorrect hash." >&2
+				print_error "${Y} has incorrect hash."
 				return 1
 			fi
 		done < filelist
@@ -1988,10 +1971,10 @@ fetch_create_manifest () {
 	# Report to the user if any updates were avoided due to local changes
 	if [ -s modifiedfiles ]; then
 		echo
-		echo -n "The following files are affected by updates, " >&2
-		echo "but no changes have" >&2
-		echo -n "been downloaded because the files have been " >&2
-		echo "modified locally:" >&2
+		echo -n "The following files are affected by updates, "
+		echo "but no changes have"
+		echo -n "been downloaded because the files have been "
+		echo "modified locally:"
 		cat modifiedfiles
 	fi | $PAGER
 	rm modifiedfiles
@@ -2001,8 +1984,8 @@ fetch_create_manifest () {
 	    ! [ -s INDEX-NEW ]; then
 		rm INDEX-PRESENT INDEX-NEW
 		echo
-		echo -n "No updates needed to update system to " >&2
-		echo "${RELNUM}-p${RELPATCHNUM}." >&2
+		echo -n "No updates needed to update system to "
+		echo "${RELNUM}-p${RELPATCHNUM}."
 		return
 	fi
 
@@ -2020,8 +2003,8 @@ fetch_create_manifest () {
 	# Report removed files, if any
 	if [ -s files.removed ]; then
 		echo
-		echo -n "The following files will be removed " >&2
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
+		echo -n "The following files will be removed "
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
 		cat files.removed
 	fi | $PAGER
 	rm files.removed
@@ -2029,8 +2012,8 @@ fetch_create_manifest () {
 	# Report added files, if any
 	if [ -s files.added ]; then
 		echo
-		echo -n "The following files will be added " >&2
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
+		echo -n "The following files will be added "
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
 		cat files.added
 	fi | $PAGER
 	rm files.added
@@ -2038,9 +2021,8 @@ fetch_create_manifest () {
 	# Report updated files, if any
 	if [ -s files.updated ]; then
 		echo
-		echo -n "The following files will be updated " >&2
-		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:" >&2
-
+		echo -n "The following files will be updated "
+		echo "as part of updating to ${RELNUM}-p${RELPATCHNUM}:"
 		cat files.updated
 	fi | $PAGER
 	rm files.updated
@@ -2070,8 +2052,8 @@ fetch_warn_eol () {
 
 	# If the EoL time is past, warn.
 	if [ ${EOLTIME} -lt ${NOWTIME} ]; then
-		echo
-		cat <<-EOF >&2
+		cat <<-EOF | print_error
+
 		WARNING: `uname -sr` HAS PASSED ITS END-OF-LIFE DATE.
 		Any security issues discovered after `date -r ${EOLTIME}`
 		will not have been corrected.
@@ -2114,8 +2096,8 @@ fetch_warn_eol () {
 	fi
 
 	# Print the warning
-	echo
-	cat <<-EOF >&2
+	cat <<-EOF | print_error
+
 		WARNING: `uname -sr` is approaching its End-of-Life date.
 		It is strongly recommended that you upgrade to a newer
 		release within the next ${NUM} ${UNIT}.
@@ -2758,7 +2740,7 @@ backup_kernel_finddir () {
 		# the end and try again.
 		CNT=$((CNT + 1))
 		if [ $CNT -gt 9 ]; then
-			echo "Could not find valid backup dir ($BASEDIR/$BACKUPKERNELDIR)" >&2
+			print_error "Could not find valid backup dir ($BASEDIR/$BACKUPKERNELDIR)"
 			exit 1
 		fi
 		BACKUPKERNELDIR="`echo $BACKUPKERNELDIR | sed -Ee 's/[0-9]\$//'`"
@@ -2797,7 +2779,7 @@ backup_kernel () {
 	# Mark the directory as having been created by freebsd-update.
 	touch $BASEDIR/$BACKUPKERNELDIR/.freebsd-update
 	if [ $? -ne 0 ]; then
-		echo "Could not create kernel backup directory" >&2
+		print_error "Could not create kernel backup directory"
 		exit 1
 	fi
 
@@ -3181,7 +3163,7 @@ IDS_compare () {
 	while read FPATH TYPE OWNER GROUP PERM HASH LINK P_TYPE P_OWNER P_GROUP P_PERM P_HASH P_LINK; do
 		# Warn about different object types.
 		if ! [ "${TYPE}" = "${P_TYPE}" ]; then
-			echo -n "${FPATH} is a " >&2
+			echo -n "${FPATH} is a "
 			case "${P_TYPE}" in
 			f)	echo -n "regular file, "
 				;;
@@ -3243,8 +3225,7 @@ IDS_compare () {
 		# We don't warn about different hard links, since some
 		# some archivers break hard links, and as long as the
 		# underlying data is correct they really don't matter.
-	done >&2 < INDEX-NOTMATCHING
-
+	done < INDEX-NOTMATCHING | print_error
 	# Clean up
 	rm $1 $1.noflags $1.sorted $2 INDEX-NOTMATCHING
 }
@@ -3306,9 +3287,9 @@ get_params () {
 # interactively, then run fetch_check_params and fetch_run
 cmd_fetch () {
 	if [ ! -t 0 -a $NOTTYOK -eq 0 ]; then
-		echo -n "`basename $0` fetch should not " >&2
-		echo "be run non-interactively." >&2
-		echo "Run `basename $0` cron instead." >&2
+		print_error -n "`basename $0` fetch should not "
+		print_error "be run non-interactively."
+		print_error "Run `basename $0` cron instead."
 		exit 1
 	fi
 	fetch_check_params
