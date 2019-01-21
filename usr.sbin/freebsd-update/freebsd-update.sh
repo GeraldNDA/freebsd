@@ -306,11 +306,14 @@ config_TargetRelease () {
 
 # Pretend current release is FreeBSD $1
 config_SourceRelease () {
-	UNAME_r=$1
-	if echo ${UNAME_r} | grep -qE '^[0-9.]+$'; then
-		UNAME_r="${UNAME_r}-RELEASE"
+	if [ -z ${SOURCERELEASE} ]; then
+		SOURCERELEASE=$1
+	else
+		return 1
 	fi
-	export UNAME_r
+	if echo ${SOURCERELEASE} | grep -qE '^[0-9.]+$'; then
+		SOURCERELEASE="${SOURCERELEASE}-RELEASE"
+	fi
 }
 
 # Define what happens to output of utilities
@@ -569,6 +572,7 @@ default_params () {
 	config_AllowDelete yes
 	config_KeepModifiedMetadata yes
 	config_BaseDir /
+	config_SourceRelease `$VERSION_COMMAND`
 	config_VerboseLevel stats
 	config_StrictComponents no
 	config_BackupKernel yes
@@ -616,7 +620,7 @@ fetch_setup_verboselevel () {
 # user is running -SECURITY, call it -RELEASE.  Chdir
 # into the working directory.
 fetchupgrade_check_params () {
-	export HTTP_USER_AGENT="freebsd-update (${COMMAND}, `uname -r`)"
+	export HTTP_USER_AGENT="freebsd-update (${COMMAND}, ${SOURCERELEASE})"
 
 	_SERVERNAME_z=\
 "SERVERNAME must be given via command line or configuration file."
@@ -661,7 +665,7 @@ fetchupgrade_check_params () {
 	# to provide an upgrade path for FreeBSD Update 1.x users, since
 	# the kernels provided by FreeBSD Update 1.x are always labelled
 	# as X.Y-SECURITY.
-	RELNUM=`uname -r |
+	RELNUM=`echo ${SOURCERELEASE} |
 	    sed -E 's,-p[0-9]+,,' |
 	    sed -E 's,-SECURITY,-RELEASE,'`
 	ARCH=`uname -m`
@@ -892,7 +896,7 @@ rollback_check_params () {
 # -SECURITY, call it -RELEASE.  Chdir into the working
 # directory.
 IDS_check_params () {
-	export HTTP_USER_AGENT="freebsd-update (${COMMAND}, `uname -r`)"
+	export HTTP_USER_AGENT="freebsd-update (${COMMAND}, ${SOURCERELEASE})"
 
 	_SERVERNAME_z=\
 "SERVERNAME must be given via command line or configuration file."
@@ -928,7 +932,7 @@ IDS_check_params () {
 	# to provide an upgrade path for FreeBSD Update 1.x users, since
 	# the kernels provided by FreeBSD Update 1.x are always labelled
 	# as X.Y-SECURITY.
-	RELNUM=`uname -r |
+	RELNUM=`echo ${SOURCERELEASE} |
 	    sed -E 's,-p[0-9]+,,' |
 	    sed -E 's,-SECURITY,-RELEASE,'`
 	ARCH=`uname -m`
@@ -1191,7 +1195,7 @@ fetch_tag () {
 # going to "update" backwards and to prevent replay attacks.
 fetch_tagsanity () {
 	# Check that we're not going to move from -pX to -pY with Y < X.
-	RELPX=`uname -r | sed -E 's,.*-,,'`
+	RELPX=`echo ${SOURCERELEASE} | sed -E 's,.*-,,'`
 	if echo ${RELPX} | grep -qE '^p[0-9]+$'; then
 		RELPX=`echo ${RELPX} | cut -c 2-`
 	else
@@ -1201,7 +1205,7 @@ fetch_tagsanity () {
 		echo
 		echo -n "Files on mirror (${RELNUM}-p${RELPATCHNUM})"
 		echo " appear older than what"
-		echo "we are currently running (`uname -r`)!"
+		echo "we are currently running (`${SOURCERELEASE}`)!"
 		echo "Cowardly refusing to proceed any further."
 		return 1
 	fi
@@ -3342,6 +3346,14 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin:${PATH}
 # Set a pager if the user doesn't
 if [ -z "$PAGER" ]; then
 	PAGER=/usr/bin/less
+fi
+
+# Use freebsd-version for getting the version
+# Otherwise revert to uname -r
+if [ type freebsd-version > /dev/null ]; then
+	VERSION_COMMAND="freebsd-version"
+else
+	VERSION_COMMAND="uname -r"
 fi
 
 # Set LC_ALL in order to avoid problems with character ranges like [A-Z].
