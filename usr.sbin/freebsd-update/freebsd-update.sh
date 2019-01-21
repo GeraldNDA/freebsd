@@ -520,8 +520,8 @@ parse_cmdline () {
 
 print_error () {
 	if [ $# -eq 0 ]; then
-		while read line; do
-			echo "${line}" >&2
+		while read LINE; do
+			echo "${LINE}" >&2
 		done
 	else
 		echo $@ >&2
@@ -3271,6 +3271,7 @@ IDS_run () {
 	# Compare INDEX-ALL and INDEX-PRESENT and print warnings about any
 	# differences.
 	IDS_compare INDEX-ALL INDEX-PRESENT
+}
 
 #### Main functions -- call parameter-handling and core functions
 
