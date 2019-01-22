@@ -686,19 +686,6 @@ fetchupgrade_check_params () {
 		;;
 	esac
 
-	case ${ARCH} in
-	i386 | amd64)
-		;;
-	*)
-		echo -n "`basename $0`: "
-		cat <<- EOF
-			Upgrading from a '${ARCH}' system is unsupported by `basename $0`.
-			Instead, FreeBSD can be directly upgraded by source.
-		EOF
-		exit 1
-		;;
-	esac
-
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
@@ -1035,7 +1022,16 @@ fetch_pick_server () {
 
 # Have we run out of mirrors?
 	if [ `wc -l < serverlist` -eq 0 ]; then
-		echo "No mirrors remaining, giving up."
+		cat <<- EOF
+			No mirrors remaining, giving up.
+
+			This may be because upgrading from this platform (${ARCH})
+			or release (${RELNUM}) is unsupported by `basename $0`. Only
+			platforms with Tier 1 support can be upgraded by `basename $0`.
+			See https://www.freebsd.org/platforms/index.html for more info.
+
+			If unsupported, FreeBSD must be upgraded by source.
+		EOF
 		return 1
 	fi
 
