@@ -95,7 +95,8 @@ EOF
 CONFIGOPTIONS="KEYPRINT WORKDIR SERVERNAME MAILTO ALLOWADD ALLOWDELETE
     KEEPMODIFIEDMETADATA COMPONENTS IGNOREPATHS UPDATEIFUNMODIFIED
     BASEDIR VERBOSELEVEL TARGETRELEASE STRICTCOMPONENTS MERGECHANGES
-    IDSIGNOREPATHS BACKUPKERNEL BACKUPKERNELDIR BACKUPKERNELSYMBOLFILES"
+    IDSIGNOREPATHS BACKUPKERNEL BACKUPKERNELDIR BACKUPKERNELSYMBOLFILES
+    ALLOWUNATTENDED"
 
 # Set all the configuration options to "".
 nullconfig () {
@@ -399,6 +400,25 @@ config_BackupKernelSymbolFiles () {
 	fi
 }
 
+config_AllowUnattended () {
+	if [ -z ${ALLOWUNATTENDED} ]; then
+		case $1 in
+		[Yy][Ee][Ss])
+			ALLOWUNATTENDED=yes
+			PAGER=cat
+			;;
+		[Nn][Oo])
+			ALLOWUNATTENDED=no
+			;;
+		*)
+			return 1
+			;;
+		esac
+	else
+		return 1
+	fi
+}
+
 # Handle one line of configuration
 configline () {
 	if [ $# -eq 0 ]; then
@@ -574,6 +594,7 @@ default_params () {
 	config_BackupKernel yes
 	config_BackupKernelDir /boot/kernel.old
 	config_BackupKernelSymbolFiles no
+	config_AllowUnattended no
 
 	# Merge these defaults into the earlier-configured settings
 	mergeconfig
@@ -1110,16 +1131,18 @@ fetch_progress () {
 
 # Function for asking the user if everything is ok
 continuep () {
-	while read -p "Does this look reasonable (y/n)? " CONTINUE; do
-		case "${CONTINUE}" in
-		y*)
-			return 0
-			;;
-		n*)
-			return 1
-			;;
-		esac
-	done
+	if [ ${ALLOWUNATTENDED} = "yes" ]; then
+		while read -p "Does this look reasonable (y/n)? " CONTINUE; do
+			case "${CONTINUE}" in
+			y*)
+				return 0
+				;;
+			n*)
+				return 1
+				;;
+			esac
+		done
+	fi
 }
 
 # Initialize the working directory
@@ -2438,12 +2461,19 @@ upgrade_merge () {
 		echo " done."
 
 		# Ask the user to handle any files which didn't merge.
+		CONFLICTS=0
 		while read F; do
 			# If the installed file differs from the version in
 			# the old release only due to RCS tag expansion
 			# then just use the version in the new release.
 			if samef merge/old/${F} merge/${OLDRELNUM}/${F}; then
 				cp merge/${RELNUM}/${F} merge/new/${F}
+				continue
+			elif [ ${ALLOWUNATTENDED} = "yes"] ; then
+				cat <<- EOF
+					'${F}' could not be merged automatically.
+				EOF
+				CONFLICTS=$((CONFLICTS+1))
 				continue
 			fi
 
@@ -2457,6 +2487,14 @@ manually...
 			${EDITOR} `pwd`/merge/new/${F} < /dev/tty
 		done < failed.merges
 		rm failed.merges
+		# Fail to upgrade unattended if there are any merge conflicts.
+		if [ ${ALLOWUNATTENDED} = "yes" ] && [ ${CONFLICTS} -gt 0 ]; then
+			cat <<- EOF
+				Found ${CONFLICTS} merge conflicts,
+				cannot continue to upgrade unattended.
+			EOF
+			return 1
+		fi
 
 		# Ask the user to confirm that he likes how the result
 		# of merging files.
