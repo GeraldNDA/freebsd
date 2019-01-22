@@ -688,16 +688,16 @@ fetchupgrade_check_params () {
 	esac
 
 	case ${ARCH} in
-		i386 | amd64)
-			;;
-		*)
-			echo -n "`basename $0:`"
-			cat <<- EOF
-				Upgrading from '${ARCH}' is unsupported by `basename $0`.
-				Instead, FreeBSD can be directly upgraded by source.
-			EOF
-			exit 1
-			;;
+	i386 | amd64)
+		;;
+	*)
+		echo -n "`basename $0`: "
+		cat <<- EOF
+			Upgrading from a '${ARCH}' system is unsupported by `basename $0`.
+			Instead, FreeBSD can be directly upgraded by source.
+		EOF
+		exit 1
+		;;
 	esac
 
 	# Figure out what directory contains the running kernel
