@@ -2798,29 +2798,45 @@ install_from_index () {
 	sort -k 1,1 -t '|' $1 |
 	    tr '|' ' ' |
 	    while read FPATH TYPE OWNER GROUP PERM FLAGS HASH LINK; do
+		_FILE_INSTALL_STATUS=0
 		case ${TYPE} in
 		d)
 			# Create a directory
 			install -d -o ${OWNER} -g ${GROUP}		\
 			    -m ${PERM} ${BASEDIR}/${FPATH}
+			_FILE_INSTALL_STATUS=$?
 			;;
 		f)
 			if [ -z "${LINK}" ]; then
 				# Create a file, without setting flags.
 				gunzip < files/${HASH}.gz > ${HASH}
-				install -S -o ${OWNER} -g ${GROUP}	\
-				    -m ${PERM} ${HASH} ${BASEDIR}/${FPATH}
-				rm ${HASH}
+				_FILE_INSTALL_STATUS=$?
+				if [ ${_FILE_INSTALL_STATUS} -eq 0 ]; then
+					install -S -o ${OWNER} -g ${GROUP}	\
+					    -m ${PERM} ${HASH} ${BASEDIR}/${FPATH}
+					_FILE_INSTALL_STATUS=$?
+					rm ${HASH}
+				fi
 			else
 				# Create a hard link.
 				ln -f ${BASEDIR}/${LINK} ${BASEDIR}/${FPATH}
+				_FILE_INSTALL_STATUS=$?
 			fi
 			;;
 		L)
 			# Create a symlink
 			ln -sfh ${HASH} ${BASEDIR}/${FPATH}
+			_FILE_INSTALL_STATUS=$?
 			;;
 		esac
+		if [ ${_FILE_INSTALL_STATUS} -ne 0 ]; then
+			cat <<- EOF
+				Failed to install file ${BASEDIR}/${FPATH}.
+				Please verify that there is enough space available in
+				${BASEDIR} to install new files.
+			EOF
+			return 1
+		fi
 	    done
 
 	# Perform a second pass, adding file flags.
@@ -2850,13 +2866,13 @@ install_delete () {
 	while read FPATH TYPE; do
 		case ${TYPE} in
 		d)
-			rmdir ${BASEDIR}/${FPATH}
+			rmdir ${BASEDIR}/${FPATH} || return 1
 			;;
 		f)
-			rm ${BASEDIR}/${FPATH}
+			rm ${BASEDIR}/${FPATH} || return 1
 			;;
 		L)
-			rm ${BASEDIR}/${FPATH}
+			rm ${BASEDIR}/${FPATH} || return 1
 			;;
 		esac
 	done < killfiles
