@@ -2458,7 +2458,8 @@ manually...
 			# Verify that file was indeed resolved
 			if diff -U0 merge/old/${F} merge/new/${F} |
 			    grep -qE '^\+<+ current version$'; then
-				echo "WARNING: Unresolved conflicts still exist in '${F}'."
+				echo "Unresolved conflicts still exist in '${F}'. Giving up."
+				return 1
 			fi
 		done < failed.merges
 		rm failed.merges
