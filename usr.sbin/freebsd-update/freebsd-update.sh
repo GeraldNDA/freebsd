@@ -2455,6 +2455,11 @@ manually...
 			EOF
 			read dummy </dev/tty
 			${EDITOR} `pwd`/merge/new/${F} < /dev/tty
+			# Verify that file was indeed resolved
+			if diff -U0 merge/old/${F} merge/new/${F} |
+			    grep -qE '^\+<+ current version$'; then
+				echo "WARNING: Unresolved conflicts still exist in '${F}'."
+			fi
 		done < failed.merges
 		rm failed.merges
 
