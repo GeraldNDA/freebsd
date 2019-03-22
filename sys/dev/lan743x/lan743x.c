@@ -44,6 +44,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/kernel.h>
 
+/* Resource Alloc (work with PCI bus) */
+#include <sys/bus.h>
+#include <sys/rman.h>
+#include <machine/bus.h>
+#include <machine/resource.h>
+
 /* Needed for Network I/F */
 #include <net/ethernet.h>
 #include <net/if.h>
@@ -68,9 +74,11 @@ static struct lan743x_vendor_info_t lan743x_vendor_info_array[] = {
 static int	lan743x_probe(device_t);
 static int	lan743x_attach(device_t);
 static int	lan743x_detach(device_t);
-static int	lan743x_shutdown(device_t);
-static int	lan743x_suspend(device_t);
-static int	lan743x_resume(device_t);
+/* static int	lan743x_shutdown(device_t); */
+/* static int	lan743x_suspend(device_t); */
+/* static int	lan743x_resume(device_t); */
+
+
 
 /*
  * Probe for a lan743x device. This is done by checking the device list.
@@ -98,9 +106,86 @@ lan743x_probe(device_t dev)
 
 }
 
+static int
+lan743x_test_bar(device_t dev)
+{
+	sc = device_get_softc(dev);
+	/* Alloc bar 0 */
+	/* check_chip_id() */
+	/* dealloc */
+	/* ret if is bar 0 */
+	/* Alloc bar 1 */
+	/* check_chip_id() */
+	/* dealloc */
+	/* ret if is bar 1 */
+}
+
 /*
  * Attach to a lan743x device.
- * => 
+ * => Initialize many a variable
+ */
+static int
+lan743x_attach(device_t dev)
+{
+	struct lan743x_softc *sc;
+
+	sc = device_get_softc(sc);
+	/* Allocate bus resources for using PCI bus */
+	/* pci_enable_busmaster(dev); */
+
+	/* CSR_BASE refers to Base Address 0 and Base Address 1 */
+
+	rid = PCIR_BAR(0); /* maybe should be 1 */
+	sc->registers = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
+	    &rid, RF_ACTIVE);
+	if (unlikely(sc->registers == NULL)) {
+		device_printf(dev, "Unable to allocate bus resource: registers.\n");
+		goto fail;
+	}
+
+	rc = lan743x_hw_init(dev);
+	if (unlikely(rc != 0)) {
+		device_printf(dev, "LAN743X device init failed. (err: %d)\n", rc);
+		goto fail;
+	}
+fail:
+	if (error)
+		lan743x_detach();
+
+	return (error);
+}
+
+static int
+lan743x_hw_init(device_t dev)
+{
+	struct lan743x_softc *sc;
+	int error = 0;
+
+	sc = device_get_softc(dev);
+	error = lan743x_reset(sc);
+	if(unlikely(error != 0))
+		goto fail;
+	/* Initialize MAC*/
+	/** Reset MAC **/
+fail:
+	return error;
+}
+
+
+static int
+lan743x_reset(struct lan743x_softc *sc)
+{
+	CSR_WRITE_REG(sc, CSR_READ_REG(sc, LAN743X_HW_CFG) | LAN743X_LITE_RESET);
+	/**TODO: Figure out what CHECK_UNTIL_TIMEOUT should look like. **/
+	status = CHECK_UNTIL_TIMEOUT(
+		!(CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET);
+	)
+	return status;
+}
+
+
+
+
 
 /*********************************************************************
  *  FreeBSD Device Interface Entry Points
