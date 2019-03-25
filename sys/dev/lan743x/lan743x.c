@@ -128,17 +128,20 @@ static int
 lan743x_attach(device_t dev)
 {
 	struct lan743x_softc *sc;
+	uint8_t ethaddr[ETHER_ADDR_LEN];
+	int error = 0;
 
-	sc = device_get_softc(sc);
+	sc = device_get_softc(dev);
+	sc->dev = dev;
 	/* Allocate bus resources for using PCI bus */
 	/* pci_enable_busmaster(dev); */
 
-	/* CSR_BASE refers to Base Address 0 and Base Address 1 */
+	sc->dev = dev;
 
-	rid = PCIR_BAR(0); /* maybe should be 1 */
-	sc->registers = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
+	rid = PCIR_BAR(LAN743X_BAR); /* combine PCI_BAR 0 and 1 */
+	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
 	    &rid, RF_ACTIVE);
-	if (unlikely(sc->registers == NULL)) {
+	if (unlikely(sc->regs == NULL)) {
 		device_printf(dev, "Unable to allocate bus resource: registers.\n");
 		goto fail;
 	}
@@ -148,11 +151,98 @@ lan743x_attach(device_t dev)
 		device_printf(dev, "LAN743X device init failed. (err: %d)\n", rc);
 		goto fail;
 	}
+
+	sc->ifp = if_alloc(IFT_ETHER);
+	if(unlikely(sc->ifp == NULL) {
+		device_printf(dev, "Unable to allocate ifnet structure.")
+	}
+	lan743x_get_ethaddr(sc, (caddr_t)ethaddr);
+
+	/* IMPLEMENTED */
+	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
+	if_setdev(sc->ifp, dev);
+	if_setsoftc(sc->ifp, sc);
+
+	/* NOT IMPLEMENTED */
+	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
+	if_setinitfn(sc->ifp, ena_init);
+	if_settransmitfn(sc->ifp, ena_mq_start);
+	if_setqflushfn(sc->ifp, ena_qflush);
+	if_setioctlfn(sc->ifp, ena_ioctl);
+	if_setgetcounterfn(sc->ifp, ena_get_counter);
+
+	if_setsendqlen(sc->ifp, sc->tx_ring_size);
+	if_setsendqready(sc->ifp);
+	if_setmtu(sc->ifp, ETHERMTU);
+	if_setbaudrate(sc->ifp, 0);
+	if_setcapabilities(sc->ifp, 0);
+	if_setcapenable(sc->ifp, 0);
+	caps = ena_get_dev_offloads(feat);
+	if_setcapabilitiesbit(sc->ifp, caps, 0);
+
+	sc->ifp->if_hw_tsomax = ENA_TSO_MAXSIZE -
+	    (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);
+	sc->ifp->if_hw_tsomaxsegcount = sc->max_tx_sgl_size - 1;
+	sc->ifp->if_hw_tsomaxsegsize = ENA_TSO_MAXSIZE;
+
+	if_setifheaderlen(sc->ifp, sizeof(struct ether_vlan_header));
+	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
+
+	ifmedia_init(&sc->media, IFM_IMASK,
+	    ena_media_change, ena_media_status);
+	ifmedia_add(&sc->media, IFM_ETHER | IFM_AUTO, 0, NULL);
+	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
+
+	/* IMPLEMENTED */
+	ether_ifattach(ifp, ethaddr);
+
 fail:
 	if (error)
 		lan743x_detach();
 
 	return (error);
+}
+
+static int
+lan743x_detach(device_t dev)
+{
+	struct lan743x_softc *sc;
+
+	sc = device_get_softc(dev);
+	/* detach ethernet i/f */
+	/* turn off device */
+	/* -> turn off interrupts */
+	/* -> clear sts/ctrl registers */
+	/* -> clear/remove buffers */
+	/* remove watchdogs */
+
+
+	if(sc->miibus)
+		device_delete_child(dev, sc->miibus);
+	bus_generic_detach(dev);
+
+	if(sc->regs)
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    PCIR_BAR(LAN743X_BAR), sc->regs);
+	if(sc->ifp)
+		if_free(ifp);
+	/* DMA free */
+	/* mtx destroy */
+
+
+	return (0);
+
+
+}
+
+static int
+lan743x_get_ethaddr(lan743x_softc *sc, caddr_t dest)
+{
+	/* This should read the bytes of mac address one at a time
+	 * so endianness shouldn't be an issue ... (each bus_read method)
+	 * is defined at the device level.
+	 */
+	CSR_READ_REG_BYTES(sc, LAN74X_MAC_ADDR_BASE, dest, ETHER_ADDR_LEN);
 }
 
 static int
@@ -162,28 +252,103 @@ lan743x_hw_init(device_t dev)
 	int error = 0;
 
 	sc = device_get_softc(dev);
-	error = lan743x_reset(sc);
+	error = lan743x_hw_reset(sc);
 	if(unlikely(error != 0))
 		goto fail;
-	/* Initialize MAC*/
-	/** Reset MAC **/
+
+	lan743x_mac_init(sc);
+
+	error = lan743x_phy_reset(sc);
+	if(unlikely(error != 0))
+		goto fail;
+
+	error = lan743x_dmac_reset(sc);
+	if(unlikely(error != 0))
+		goto fail;
+
+	/**ring initializations **/
 fail:
 	return error;
 }
 
+static int
+lan743x_hw_reset(struct lan743x_softc *sc)
+{
+	int i;
+	CSR_UPDATE_REG(sc, LAN743X_HW_CFG, LAN743X_LITE_RESET);
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10); /* > 5us delay */
+		if(!CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET)
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	return LAN743X_STS_OK;
+}
 
 static int
-lan743x_reset(struct lan743x_softc *sc)
+lan743x_mac_init(struct lan743x-softc *sc)
 {
-	CSR_WRITE_REG(sc, CSR_READ_REG(sc, LAN743X_HW_CFG) | LAN743X_LITE_RESET);
-	/**TODO: Figure out what CHECK_UNTIL_TIMEOUT should look like. **/
-	status = CHECK_UNTIL_TIMEOUT(
-		!(CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET);
-	)
-	return status;
+	/**
+	 * enable automatic duplex detection and
+	 * automatic speed detection
+	 */
+	CSR_UPDATE_REG(
+		sc,
+		LAN743X_MAC_CR,
+		LAN743x_MAC_ADD_ENBL | LAN743X_MAC_ASD_ENBL
+	);
+	return LAN743X_STS_OK;
 }
 
 
+static int
+lan743x_phy_reset(struct lan743x_softc *sc)
+{
+	int i;
+	CSR_UPDATE_REG(
+		sc,
+		LAN743X_PMT_CTL,
+		LAN743X_PHY_RESET
+	);
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10); /* 2ms max */
+		if(!(CSR_READ_REG(sc, LAN743X_PMT_CTL) & LAN743X_PHY_RESET))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		if(CSR_READ_REG(sc, LAN743X_PMT_CTL) & LAN743X_PHY_READY)
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	return LAN743X_STS_OK;
+}
+
+static int
+lan743x_dmac_reset(struct lan743x_softc *sc)
+{
+	int i;
+	CSR_WRITE_REG(sc, LAN743X_DMAC_CMD, LAN743X_DMAC_RESET);
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10);
+		if(!(CSR_READ_REG(sc, LAN743X_DMAC_CMD) & LAN743X_DMAC_RESET))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	return LAN743X_STS_OK;
+}
 
 
 
@@ -199,6 +364,11 @@ static device_method_t lan743x_methods[] = {
 	/* DEVMETHOD(device_shutdown,	lan743x_shutdown), */
 	/* DEVMETHOD(device_suspend,	lan743x_suspend),  */
 	/* DEVMETHOD(device_resume,	lan743x_resume),   */
+
+
+	/* MII Interface */
+	DEVMETHOD(miibus_readreg,	lan743x_miibus_readreg),
+	DEVMETHOD(miibus_writereg,	lan743x_miibus_writereg),
 
 	DEVMETHOD_END
 };
