@@ -70,7 +70,7 @@ static struct lan743x_vendor_info_t lan743x_vendor_info_array[] = {
 	{ 0, 0, NULL }
 };
 
-/* <FUNCTIONS> */
+/* PCI methods */
 static int	lan743x_probe(device_t);
 static int	lan743x_attach(device_t);
 static int	lan743x_detach(device_t);
@@ -78,6 +78,27 @@ static int	lan743x_detach(device_t);
 /* static int	lan743x_suspend(device_t); */
 /* static int	lan743x_resume(device_t); */
 
+/* MSI Interrupts support */
+static int	lan743x_test_bar(device_t);
+
+/* MAC support */
+static int	lan743x_get_ethaddr(struct lan743x_softc *, caddr_t);
+
+
+/* MII methods */
+static int	lan743x_miibus_readreg(device_t, int, int);
+static int	lan743x_miibus_writereg(device_t, int, int, int);
+
+/* IFNET methods */
+static void	lan743x_init(void *);
+static int	lan743x_ioctl(if_t, u_long, caddr_t);
+
+/* HW reset helper functions */
+static int	lan743x_hw_init(device_t);
+static int	lan743x_hw_reset(struct lan743x_softc *);
+static int	lan743x_mac_init(struct lan743x_softc *);
+static int	lan743x_dmac_reset(struct lan743x_softc *);
+static int	lan743x_phy_reset(struct lan743x_softc *);
 
 
 /*
@@ -226,7 +247,7 @@ lan743x_detach(device_t dev)
 }
 
 static int
-lan743x_get_ethaddr(lan743x_softc *sc, caddr_t dest)
+lan743x_get_ethaddr(struct lan743x_softc *sc, caddr_t dest)
 {
 	/* This should read the bytes of mac address one at a time
 	 * so endianness shouldn't be an issue ... (each bus_read method)
@@ -434,6 +455,7 @@ lan743x_miibus_writereg(device_t dev, int phy, int reg, int data)
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return 0;
 }
+
 
 
 /*********************************************************************
