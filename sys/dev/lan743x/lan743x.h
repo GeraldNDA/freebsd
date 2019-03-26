@@ -32,6 +32,17 @@
 #define LAN743X_PHY_RESET		0x10
 #define LAN743X_PHY_READY		0x80
 
+
+#define LAN743X_MII_ACCESS		0x120
+#define LAN743X_MII_DATA		0x124
+#define LAN743X_MII_PHY_ADDR_MASK	0x1F
+#define LAN743X_MII_PHY_ADDR_SHIFT	6
+#define LAN743X_MII_REG_ADDR_MASK	0x3F
+#define LAN743X_MII_REG_ADDR_SHIFT	11
+#define LAN743X_MII_READ		0x0
+#define LAN743X_MII_WRITE		0x2
+#define LAN743X_MII_BUSY		0x1
+
 #define LAN743X_MAC_ADDR_BASE		0x118 /** MAC address (read) register **/
 
 #define LAN743X_STS_OK			( 0 )
@@ -58,6 +69,9 @@
 
 #define CSR_UPDATE_REG(sc, reg, val)	\
 	CSR_WRITE_REG(sc, CSR_READ_REG(sc, reg) | (val))
+
+#define CSR_READ_2_BYTES(sc, reg)	\
+	bus_read_2(sc->regs, reg)
 
 #define CSR_READ_REG_BYTES(sc, reg, dest, cnt)	\
 	bus_read_region_1(sc->regs, reg, dest, cnt)

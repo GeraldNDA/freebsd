@@ -153,47 +153,38 @@ lan743x_attach(device_t dev)
 	}
 
 	sc->ifp = if_alloc(IFT_ETHER);
-	if(unlikely(sc->ifp == NULL) {
-		device_printf(dev, "Unable to allocate ifnet structure.")
+	if(unlikely(sc->ifp == NULL)) {
+		device_printf(dev, "Unable to allocate ifnet structure.");
 	}
 	lan743x_get_ethaddr(sc, (caddr_t)ethaddr);
 
-	/* IMPLEMENTED */
 	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
 	if_setdev(sc->ifp, dev);
 	if_setsoftc(sc->ifp, sc);
 
-	/* NOT IMPLEMENTED */
 	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
-	if_setinitfn(sc->ifp, ena_init);
-	if_settransmitfn(sc->ifp, ena_mq_start);
-	if_setqflushfn(sc->ifp, ena_qflush);
-	if_setioctlfn(sc->ifp, ena_ioctl);
-	if_setgetcounterfn(sc->ifp, ena_get_counter);
+	if_setinitfn(sc->ifp, lan743x_init);
+	/* if_settransmitfn(sc->ifp, lan743x_mq_start); */
+	/* if_setqflushfn(sc->ifp, lan743x_qflush); */
+	if_setioctlfn(sc->ifp, lan743x_ioctl);
+	/* if_setgetcounterfn(sc->ifp, ena_get_counter); */
 
-	if_setsendqlen(sc->ifp, sc->tx_ring_size);
-	if_setsendqready(sc->ifp);
-	if_setmtu(sc->ifp, ETHERMTU);
+	/* if_setsendqlen(sc->ifp, sc->tx_ring_size); */
+	/* if_setsendqready(sc->ifp); */
+	/* if_setmtu(sc->ifp, ETHERMTU); */
 	if_setbaudrate(sc->ifp, 0);
-	if_setcapabilities(sc->ifp, 0);
+	if_setcapabilities(sc->ifp, 0); /* ? */
 	if_setcapenable(sc->ifp, 0);
-	caps = ena_get_dev_offloads(feat);
-	if_setcapabilitiesbit(sc->ifp, caps, 0);
 
-	sc->ifp->if_hw_tsomax = ENA_TSO_MAXSIZE -
-	    (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);
-	sc->ifp->if_hw_tsomaxsegcount = sc->max_tx_sgl_size - 1;
-	sc->ifp->if_hw_tsomaxsegsize = ENA_TSO_MAXSIZE;
 
-	if_setifheaderlen(sc->ifp, sizeof(struct ether_vlan_header));
-	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
-
+	/* SHOULDN'T NEED BECAUSE MII IS USED
+	 *
 	ifmedia_init(&sc->media, IFM_IMASK,
-	    ena_media_change, ena_media_status);
+	    lan743x_media_change, lan743x_media_status);
 	ifmedia_add(&sc->media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
+	*/
 
-	/* IMPLEMENTED */
 	ether_ifattach(ifp, ethaddr);
 
 fail:
@@ -229,7 +220,6 @@ lan743x_detach(device_t dev)
 	/* DMA free */
 	/* mtx destroy */
 
-
 	return (0);
 
 
@@ -243,6 +233,28 @@ lan743x_get_ethaddr(lan743x_softc *sc, caddr_t dest)
 	 * is defined at the device level.
 	 */
 	CSR_READ_REG_BYTES(sc, LAN74X_MAC_ADDR_BASE, dest, ETHER_ADDR_LEN);
+}
+
+static void
+lan743x_init(void *arg)
+{
+	struct lan743x_softc *sc;
+
+	sc = (struct lan743x_softc *)arg;
+	/* Lock SC */
+	/* Interrupts, DMA queues, buffer init, load station addr etc. */
+	/* Unlock SC */
+}
+
+static int
+lan743x_ioctl(if_t ifp, u_long command, caddr_t data)
+{
+	int error;
+	/* get softc from ifp */
+	/* get ifr from data */
+	/* switch on `command` */
+	error = ether_ioctl(ifp, command, data);
+	return (error);
 }
 
 static int
@@ -350,6 +362,78 @@ lan743x_dmac_reset(struct lan743x_softc *sc)
 	return LAN743X_STS_OK;
 }
 
+static int
+lan743x_miibus_readreg(device_t dev, int phy, int reg)
+{
+	struct lan743x_softc *sc;
+	int i;
+
+	sc = device_get_softc(dev);
+
+	/* for 7430 must be 1, for 7431 must be external phy */
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10);
+		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	CSR_WRITE_REG(sc, LAN743X_MII_ACCESS,
+	    ((phy & LAN743X_MII_PHY_ADDR_MASK) << LAN743X_MII_PHY_ADDR_SHIFT) |
+	    ((reg & LAN743X_MII_REG_ADDR_MASK) << LAN743X_MII_REG_ADDR_SHIFT) |
+	    LAN743X_MII_READ | LAN743X_MII_BUSY
+	);
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10);
+		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return LAN743X_STS_TIMEOUT;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	return (int)(CSR_READ_2_BYTES(sc, MII_DATA))
+}
+
+static int
+lan743x_miibus_writereg(device_t dev, int phy, int reg, int data)
+{
+
+	struct lan743x_softc *sc;
+	int i, error;
+
+	sc = device_get_softc(dev);
+	error = 0;
+
+	/* for 7430 must be 1, for 7431 must be external phy */
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10);
+		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return EIO;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	CSR_WRITE_REG(sc, LAN743X_MII_DATA, data);
+	CSR_WRITE_REG(sc, LAN743X_MII_ACCESS,
+	    ((phy & LAN743X_MII_PHY_ADDR_MASK) << LAN743X_MII_PHY_ADDR_SHIFT) |
+	    ((reg & LAN743X_MII_REG_ADDR_MASK) << LAN743X_MII_REG_ADDR_SHIFT) |
+	    LAN743X_MII_WRITE | LAN743X_MII_BUSY
+	);
+	/* CHECK_UNTIL_TIMEOUT */
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+		DELAY(10);
+		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+			break;
+	}
+	if (i == LAN743X_TIMEOUT)
+		return EIO;
+	/* END OF CHECK_UNTIL_TIMEOUT */
+	return 0;
+}
 
 
 /*********************************************************************
