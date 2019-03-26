@@ -39,10 +39,15 @@ __FBSDID("$FreeBSD$");
  * <More info about device>
  *
  */
+
+#include <sys/types.h>
+#include <sys/socket.h>
+
 /* Needed for KLD */
 #include <sys/module.h>
 #include <sys/param.h>
 #include <sys/kernel.h>
+
 
 /* Resource Alloc (work with PCI bus) */
 #include <sys/bus.h>
@@ -53,10 +58,18 @@ __FBSDID("$FreeBSD$");
 /* Needed for Network I/F */
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_types.h>
+#include <net/if_media.h>
 
 /* Needed for PCI support */
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
+
+/* Needed for MII support */
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
+#include "miibus_if.h"
 
 
 #include <dev/lan743x/lan743x.h>
@@ -64,9 +77,9 @@ __FBSDID("$FreeBSD$");
 /*
  * List here so that you can easily do device recon
  */
-static struct lan743x_vendor_info_t lan743x_vendor_info_array[] = {
-	{ LAN743X_VENDORID, LAN7430_DEVICEID, "<DEVICE NICE NAME>" }, /* defined in reg.h */
-	{ LAN743X_VENDORID, LAN7431_DEVICEID, "<DEVICE NICE NAME>" },
+static struct lan743x_vendor_info lan743x_vendor_info_array[] = {
+	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7430, "Microchip LAN7430 PCIe Gigabit Ethernet Controller" }, /* defined in reg.h */
+	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7431, "Microchip LAN7431 PCIe Gigabit Ethernet Controller" },
 	{ 0, 0, NULL }
 };
 
@@ -79,10 +92,10 @@ static int	lan743x_detach(device_t);
 /* static int	lan743x_resume(device_t); */
 
 /* MSI Interrupts support */
-static int	lan743x_test_bar(device_t);
+static int	lan743x_test_bar(struct lan743x_softc *);
 
 /* MAC support */
-static int	lan743x_get_ethaddr(struct lan743x_softc *, caddr_t);
+static void	lan743x_get_ethaddr(struct lan743x_softc *, caddr_t);
 
 
 /* MII methods */
@@ -110,14 +123,14 @@ static int	lan743x_phy_reset(struct lan743x_softc *);
 static int
 lan743x_probe(device_t dev)
 {
-	lan743x_vendor_info_t *currvendor;
+	struct lan743x_vendor_info *currvendor;
 
 	currvendor = lan743x_vendor_info_array;
 
-	while(currvendor->lan743x_name != NULL) {
-		if((pci_get_vendor(dev) == currvendor->lan743x_vid) &&
-		   (pci_get_device(dev) == currvendor->lan743x_did)) {
-			device_set_desc(dev, currvendor->lan743x_name);
+	while(currvendor->name != NULL) {
+		if((pci_get_vendor(dev) == currvendor->vid) &&
+		   (pci_get_device(dev) == currvendor->did)) {
+			device_set_desc(dev, currvendor->name);
 			return (BUS_PROBE_DEFAULT);
 		}
 		currvendor++;
@@ -128,9 +141,9 @@ lan743x_probe(device_t dev)
 }
 
 static int
-lan743x_test_bar(device_t dev)
+lan743x_test_bar(struct lan743x_softc *sc)
 {
-	sc = device_get_softc(dev);
+
 	/* Alloc bar 0 */
 	/* check_chip_id() */
 	/* dealloc */
@@ -139,6 +152,7 @@ lan743x_test_bar(device_t dev)
 	/* check_chip_id() */
 	/* dealloc */
 	/* ret if is bar 1 */
+	return (0);
 }
 
 /*
@@ -150,8 +164,10 @@ lan743x_attach(device_t dev)
 {
 	struct lan743x_softc *sc;
 	uint8_t ethaddr[ETHER_ADDR_LEN];
-	int error = 0;
+	int rid, error;
 
+
+	error = 0;
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 	/* Allocate bus resources for using PCI bus */
@@ -167,9 +183,9 @@ lan743x_attach(device_t dev)
 		goto fail;
 	}
 
-	rc = lan743x_hw_init(dev);
-	if (unlikely(rc != 0)) {
-		device_printf(dev, "LAN743X device init failed. (err: %d)\n", rc);
+	error = lan743x_hw_init(dev);
+	if (unlikely(error != 0)) {
+		device_printf(dev, "LAN743X device init failed. (err: %d)\n", error);
 		goto fail;
 	}
 
@@ -206,11 +222,11 @@ lan743x_attach(device_t dev)
 	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
 	*/
 
-	ether_ifattach(ifp, ethaddr);
+	ether_ifattach(sc->ifp, ethaddr);
 
 fail:
 	if (error)
-		lan743x_detach();
+		lan743x_detach(dev);
 
 	return (error);
 }
@@ -228,16 +244,17 @@ lan743x_detach(device_t dev)
 	/* -> clear/remove buffers */
 	/* remove watchdogs */
 
-
+#if 0
 	if(sc->miibus)
 		device_delete_child(dev, sc->miibus);
+#endif
 	bus_generic_detach(dev);
 
 	if(sc->regs)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    PCIR_BAR(LAN743X_BAR), sc->regs);
 	if(sc->ifp)
-		if_free(ifp);
+		if_free(sc->ifp);
 	/* DMA free */
 	/* mtx destroy */
 
@@ -246,14 +263,14 @@ lan743x_detach(device_t dev)
 
 }
 
-static int
+static void
 lan743x_get_ethaddr(struct lan743x_softc *sc, caddr_t dest)
 {
 	/* This should read the bytes of mac address one at a time
 	 * so endianness shouldn't be an issue ... (each bus_read method)
 	 * is defined at the device level.
 	 */
-	CSR_READ_REG_BYTES(sc, LAN74X_MAC_ADDR_BASE, dest, ETHER_ADDR_LEN);
+	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE, dest, ETHER_ADDR_LEN);
 }
 
 static void
@@ -312,7 +329,7 @@ lan743x_hw_reset(struct lan743x_softc *sc)
 	/* CHECK_UNTIL_TIMEOUT */
 	for(i = 0; i < LAN743X_TIMEOUT; i++) {
 		DELAY(10); /* > 5us delay */
-		if(!CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET)
+		if(!(CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET))
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
@@ -322,7 +339,7 @@ lan743x_hw_reset(struct lan743x_softc *sc)
 }
 
 static int
-lan743x_mac_init(struct lan743x-softc *sc)
+lan743x_mac_init(struct lan743x_softc *sc)
 {
 	/**
 	 * enable automatic duplex detection and
@@ -331,7 +348,7 @@ lan743x_mac_init(struct lan743x-softc *sc)
 	CSR_UPDATE_REG(
 		sc,
 		LAN743X_MAC_CR,
-		LAN743x_MAC_ADD_ENBL | LAN743X_MAC_ASD_ENBL
+		LAN743X_MAC_ADD_ENBL | LAN743X_MAC_ASD_ENBL
 	);
 	return LAN743X_STS_OK;
 }
@@ -415,7 +432,7 @@ lan743x_miibus_readreg(device_t dev, int phy, int reg)
 	if (i == LAN743X_TIMEOUT)
 		return LAN743X_STS_TIMEOUT;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return (int)(CSR_READ_2_BYTES(sc, MII_DATA))
+	return (int)(CSR_READ_2_BYTES(sc, LAN743X_MII_DATA));
 }
 
 static int
@@ -483,7 +500,7 @@ static driver_t lan743x_driver = {
 	"lan743x",
 	lan743x_methods,
 	sizeof(struct lan743x_softc)
-}
+};
 
 devclass_t lan743x_devclass;
 DRIVER_MODULE(lan743x, pci, lan743x_driver, lan743x_devclass, 0, 0);
@@ -491,8 +508,9 @@ DRIVER_MODULE(lan743x, pci, lan743x_driver, lan743x_devclass, 0, 0);
 MODULE_PNP_INFO("U16:vendor;U16:device", pci, lan743x, lan743x_vendor_info_array,
     nitems(lan743x_vendor_info_array) - 1);
 
-MODULE_DEPEND(ena, pci, 1, 1, 1);
-MODULE_DEPEND(ena, ether, 1, 1, 1);
+MODULE_DEPEND(lan743x, pci, 1, 1, 1);
+MODULE_DEPEND(lan743x, ether, 1, 1, 1);
+MODULE_DEPEND(lan743x, miibus, 1, 1, 1);
 
 /*********************************************************************/
 
