@@ -43,8 +43,6 @@
 #include "rtld_lock.h"
 #include "rtld_machdep.h"
 
-#define DEBUG		1
-
 #define NEW(type)	((type *) xmalloc(sizeof(type)))
 #define CNEW(type)	((type *) xcalloc(1, sizeof(type)))
 
