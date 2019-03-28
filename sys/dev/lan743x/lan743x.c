@@ -268,8 +268,9 @@ lan743x_detach(device_t dev)
 		if_free(sc->ifp);
 	/* DMA free */
 	/* mtx destroy */
-
-	kdb_enter(KDB_WHY_UNSET, "Something failed in LAN743X so throwing a  panic...");
+#if 0
+	kdb_enter(KDB_WHY_UNSET, "Something failed in LAN743X so entering debugger...");
+#endif
 	return (0);
 
 
@@ -376,7 +377,7 @@ lan743x_phy_reset(struct lan743x_softc *sc)
 		LAN743X_PHY_RESET
 	);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT * 100; i++) {
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
 		DELAY(10); /* 2ms max */
 		if(!(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_RESET))
 			break;
@@ -385,7 +386,7 @@ lan743x_phy_reset(struct lan743x_softc *sc)
 		return 21;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT * 100; i++) {
+	for(i = 0; i < LAN743X_TIMEOUT; i++) {
 		if(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_READY)
 			break;
 	}

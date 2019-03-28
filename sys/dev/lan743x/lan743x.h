@@ -20,7 +20,7 @@
 #define PCI_DEVICE_ID_LAN7430		0x7430
 #define PCI_DEVICE_ID_LAN7431		0x7431
 
-#define LAN743X_TIMEOUT			(5)
+#define LAN743X_TIMEOUT			(500)
 
 #define LAN743X_BAR			0 /* PCI Base Address */
 
