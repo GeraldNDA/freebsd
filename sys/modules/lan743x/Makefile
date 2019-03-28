@@ -32,9 +32,9 @@
 
 .PATH:	${SRCTOP}/sys/dev/lan743x
 
-KMOD	= if_lan743x
+KMOD	= lan743x
 SRCS	= lan743x.c
-SRCS	+= device_if.h bus_if.h pci_if.h
+SRCS	+= device_if.h bus_if.h pci_if.h miibus_if.h
 
 .include <bsd.kmod.mk>
 

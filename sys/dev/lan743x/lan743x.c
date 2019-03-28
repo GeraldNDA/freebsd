@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/kdb.h>
 
 /* Needed for KLD */
 #include <sys/module.h>
@@ -70,7 +71,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 #include "miibus_if.h"
-
 
 #include <dev/lan743x/lan743x.h>
 
@@ -182,6 +182,16 @@ lan743x_attach(device_t dev)
 		device_printf(dev, "Unable to allocate bus resource: registers.\n");
 		goto fail;
 	}
+	
+	/** Verify that this is the correct BAR **/
+	uint32_t id_rev = CSR_READ_REG(sc, 0x0);
+	if ((id_rev & 0xFFFF0000) == (0x7430 << 16) || (id_rev & 0xFFFF0000) == (0x7431 << 16)) {
+		device_printf(dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
+	} else {
+		device_printf(dev, "ID CHECK FAILED with ID (0x%x)\n", id_rev);
+		error = ENXIO;
+		goto fail;
+	}
 
 	error = lan743x_hw_init(dev);
 	if (unlikely(error != 0)) {
@@ -223,6 +233,7 @@ lan743x_attach(device_t dev)
 	*/
 
 	ether_ifattach(sc->ifp, ethaddr);
+	device_printf(dev, "DEVICE ATTACHED SUCCESSFULLY\n");
 
 fail:
 	if (error)
@@ -258,6 +269,7 @@ lan743x_detach(device_t dev)
 	/* DMA free */
 	/* mtx destroy */
 
+	kdb_enter(KDB_WHY_UNSET, "Something failed in LAN743X so throwing a  panic...");
 	return (0);
 
 
@@ -333,7 +345,7 @@ lan743x_hw_reset(struct lan743x_softc *sc)
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 1;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return LAN743X_STS_OK;
 }
@@ -358,27 +370,27 @@ static int
 lan743x_phy_reset(struct lan743x_softc *sc)
 {
 	int i;
-	CSR_UPDATE_REG(
+	CSR_UPDATE_BYTE(
 		sc,
 		LAN743X_PMT_CTL,
 		LAN743X_PHY_RESET
 	);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < LAN743X_TIMEOUT * 100; i++) {
 		DELAY(10); /* 2ms max */
-		if(!(CSR_READ_REG(sc, LAN743X_PMT_CTL) & LAN743X_PHY_RESET))
+		if(!(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_RESET))
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 21;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
-		if(CSR_READ_REG(sc, LAN743X_PMT_CTL) & LAN743X_PHY_READY)
+	for(i = 0; i < LAN743X_TIMEOUT * 100; i++) {
+		if(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_READY)
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 2;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return LAN743X_STS_OK;
 }
@@ -395,7 +407,7 @@ lan743x_dmac_reset(struct lan743x_softc *sc)
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 3;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return LAN743X_STS_OK;
 }
@@ -416,7 +428,7 @@ lan743x_miibus_readreg(device_t dev, int phy, int reg)
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 4;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	CSR_WRITE_REG(sc, LAN743X_MII_ACCESS,
 	    ((phy & LAN743X_MII_PHY_ADDR_MASK) << LAN743X_MII_PHY_ADDR_SHIFT) |
@@ -430,7 +442,7 @@ lan743x_miibus_readreg(device_t dev, int phy, int reg)
 			break;
 	}
 	if (i == LAN743X_TIMEOUT)
-		return LAN743X_STS_TIMEOUT;
+		return 5;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return (int)(CSR_READ_2_BYTES(sc, LAN743X_MII_DATA));
 }

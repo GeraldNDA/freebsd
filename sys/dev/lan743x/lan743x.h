@@ -22,7 +22,7 @@
 
 #define LAN743X_TIMEOUT			(5)
 
-#define LAN743X_BAR			1 /* PCI Base Address */
+#define LAN743X_BAR			0 /* PCI Base Address */
 
 #define LAN743X_HW_CFG			0x10 /** H/W Configuration Register **/
 #define LAN743X_LITE_RESET 		0x2
@@ -65,6 +65,15 @@
 		status = -1;
 	***/
 	/* END OF CHECK_UNTIL_TIMEOUT */
+
+#define CSR_READ_BYTE(sc, reg)		\
+	bus_read_1(sc->regs, reg)
+
+#define CSR_WRITE_BYTE(sc, reg, val)	\
+	bus_write_1(sc->regs, reg, val)
+
+#define CSR_UPDATE_BYTE(sc, reg, val)	\
+	CSR_WRITE_BYTE(sc, reg, CSR_READ_BYTE(sc, reg) | val)
 
 #define CSR_READ_REG(sc, reg)		\
 	bus_read_4(sc->regs, reg)
