@@ -102,6 +102,11 @@ static void	lan743x_get_ethaddr(struct lan743x_softc *, caddr_t);
 static int	lan743x_miibus_readreg(device_t, int, int);
 static int	lan743x_miibus_writereg(device_t, int, int, int);
 
+/* MII MEDIA support */
+static int	lan743x_ifmedia_upd(struct ifnet *);
+static void	lan743x_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+
+
 /* IFNET methods */
 static void	lan743x_init(void *);
 static int	lan743x_ioctl(if_t, u_long, caddr_t);
@@ -112,7 +117,6 @@ static int	lan743x_hw_reset(struct lan743x_softc *);
 static int	lan743x_mac_init(struct lan743x_softc *);
 static int	lan743x_dmac_reset(struct lan743x_softc *);
 static int	lan743x_phy_reset(struct lan743x_softc *);
-
 
 /*
  * Probe for a lan743x device. This is done by checking the device list.
@@ -163,7 +167,7 @@ static int
 lan743x_attach(device_t dev)
 {
 	struct lan743x_softc *sc;
-	uint8_t ethaddr[ETHER_ADDR_LEN];
+	uint8_t ethaddr[ETHER_ADDR_LEN] = {0};
 	int rid, error;
 
 
@@ -205,6 +209,26 @@ lan743x_attach(device_t dev)
 	}
 	lan743x_get_ethaddr(sc, (caddr_t)ethaddr);
 
+	/* Attach MII Interface */
+#if 0
+	error = mii_attach(dev, &sc->miibus, sc->ifp, lan743x_ifmedia_upd,
+	    lan743x_ifmedia_sts, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
+#endif
+	error = mii_attach(dev, &sc->miibus, sc->ifp, NULL,
+	    NULL, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
+	if(unlikely(error != 0)) {
+		device_printf(dev, "Failed to attach MII interface");
+		goto fail;
+	}
+	device_printf(dev, "Attached MII interface\n");
+
+	/* UPD */
+	/* END OF UPD */
+	/* STS */
+
+
+	/* END OF STS */
+
 	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
 	if_setdev(sc->ifp, dev);
 	if_setsoftc(sc->ifp, sc);
@@ -242,6 +266,39 @@ fail:
 	return (error);
 }
 
+
+static int
+lan743x_ifmedia_upd(struct ifnet *ifp)
+{
+	struct mii_data	*miid;
+	struct mii_softc *miisc;
+	struct lan743x_softc *sc;
+	int error;
+
+	sc = ifp->if_softc;
+	
+	miid = device_get_softc(sc->miibus);
+	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
+		PHY_RESET(miisc);
+	/* SET MEDIA */
+	error = mii_mediachg(miid);
+	return error;
+}
+
+static void
+lan743x_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+{
+	struct mii_data	*miid;
+	struct lan743x_softc *sc;
+
+	sc = ifp->if_softc;
+	
+	miid = device_get_softc(sc->miibus);
+	mii_pollstat(miid);
+	ifmr->ifm_active = miid->mii_media_active;
+	ifmr->ifm_status = miid->mii_media_status;
+}
+
 static int
 lan743x_detach(device_t dev)
 {
@@ -254,11 +311,11 @@ lan743x_detach(device_t dev)
 	/* -> clear sts/ctrl registers */
 	/* -> clear/remove buffers */
 	/* remove watchdogs */
+	if(device_is_attached(dev))
+		ether_ifdetach(sc->ifp);
 
-#if 0
 	if(sc->miibus)
 		device_delete_child(dev, sc->miibus);
-#endif
 	bus_generic_detach(dev);
 
 	if(sc->regs)
@@ -283,7 +340,8 @@ lan743x_get_ethaddr(struct lan743x_softc *sc, caddr_t dest)
 	 * so endianness shouldn't be an issue ... (each bus_read method)
 	 * is defined at the device level.
 	 */
-	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE, dest, ETHER_ADDR_LEN);
+	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE_L, dest, 4);
+	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE_H, dest + 4, 2);
 }
 
 static void

@@ -31,7 +31,8 @@
 #define LAN743X_MAC_ADD_ENBL		0x1000 /* Automatic Duplex Detection */
 #define LAN743X_MAC_ASD_ENBL		0x0800 /* Automatic Speed Detection */
 
-#define LAN743X_MAC_ADDR_BASE		0x118 /** MAC address (read) register **/
+#define LAN743X_MAC_ADDR_BASE_L		0x11C /** MAC address lower 4 bytes (read) register **/
+#define LAN743X_MAC_ADDR_BASE_H		0x118 /** MAC address upper 2 bytes (read) register **/
 
 #define LAN743X_PMT_CTL			0x14 /** Power Management Control Register **/
 #define LAN743X_PHY_RESET		0x10
@@ -107,6 +108,8 @@ struct lan743x_softc {
 
 	struct resource			*regs;
 	struct lan743x_irq		*irq;
+
+	device_t			 miibus;
 };
 
 #endif /* _IF_LAN743X_H_ */
