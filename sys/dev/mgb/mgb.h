@@ -42,11 +42,14 @@
 
 #define MGB_TIMEOUT			(500)
 
-#define MGB_BAR			0 /* PCI Base Address */
+/** Control/Status Registers **/
+#define MGB_BAR				0 /* PCI Base Address */
 
+/** Reset **/
 #define MGB_HW_CFG			0x10 /** H/W Configuration Register **/
-#define MGB_LITE_RESET 		0x2
+#define MGB_LITE_RESET 			0x2
 
+/** MAC **/
 #define MGB_MAC_CR			0x0100 /** MAC Crontrol Register **/
 #define MGB_MAC_ADD_ENBL		0x1000 /* Automatic Duplex Detection */
 #define MGB_MAC_ASD_ENBL		0x0800 /* Automatic Speed Detection */
@@ -54,22 +57,36 @@
 #define MGB_MAC_ADDR_BASE_L		0x11C /** MAC address lower 4 bytes (read) register **/
 #define MGB_MAC_ADDR_BASE_H		0x118 /** MAC address upper 2 bytes (read) register **/
 
+/** PHY Reset (via power management control) **/
 #define MGB_PMT_CTL			0x14 /** Power Management Control Register **/
-#define MGB_PHY_RESET		0x10
-#define MGB_PHY_READY		0x80
+#define MGB_PHY_RESET			0x10
+#define MGB_PHY_READY			0x80
 
-#define MGB_DMAC_CMD		0xC0C
-#define MGB_DMAC_RESET		0x80000000
+/** DMA Controller **/
+#define MGB_DMAC_CMD			0xC0C
+#define MGB_DMAC_RESET			0x80000000
 
-#define MGB_MII_ACCESS		0x120
-#define MGB_MII_DATA		0x124
-#define MGB_MII_PHY_ADDR_MASK	0x1F
-#define MGB_MII_PHY_ADDR_SHIFT	6
-#define MGB_MII_REG_ADDR_MASK	0x3F
-#define MGB_MII_REG_ADDR_SHIFT	11
-#define MGB_MII_READ		0x0
-#define MGB_MII_WRITE		0x2
-#define MGB_MII_BUSY		0x1
+/** PHY **/
+#define MGB_MII_ACCESS			0x120
+#define MGB_MII_DATA			0x124
+#define MGB_MII_PHY_ADDR_MASK		0x1F
+#define MGB_MII_PHY_ADDR_SHIFT		6
+#define MGB_MII_REG_ADDR_MASK		0x3F
+#define MGB_MII_REG_ADDR_SHIFT		11
+#define MGB_MII_READ			0x0
+#define MGB_MII_WRITE			0x2
+#define MGB_MII_BUSY			0x1
+
+/** Interrupt registers **/
+#define MGB_INTR_STS			0x780
+#define MGB_INTR_SET			0x784
+#define MGB_INTR_ENBL_SET		0x788
+#define MGB_INTR_ENBL_CLR		0x78C
+#define MGB_INTR_TRIGGER		0x0200
+#define MGB_INTR_STS_ANY		(0x1)
+#define MGB_INTR_STS_RX			(0x1 << 24)
+#define MGB_INTR_STS_TX			(0x1 << 16)
+#define MGB_INTR_STS_TEST		(0x2 << 8)
 
 #define MGB_STS_OK			( 0 )
 #define MGB_STS_TIMEOUT 		(-1 )
@@ -94,7 +111,7 @@
 	bus_write_1(sc->regs, reg, val)
 
 #define CSR_UPDATE_BYTE(sc, reg, val)	\
-	CSR_WRITE_BYTE(sc, reg, CSR_READ_BYTE(sc, reg) | val)
+	CSR_WRITE_BYTE(sc, reg, CSR_READ_BYTE(sc, reg) | (val))
 
 #define CSR_READ_REG(sc, reg)		\
 	bus_read_4(sc->regs, reg)
@@ -127,9 +144,30 @@ struct mgb_softc {
 	device_t			 dev;
 
 	struct resource			*regs;
-	struct mgb_irq			*irq;
+	struct mgb_irq			 irq;
 
 	device_t			 miibus;
+
+	int				 if_flags;
+	int				 ethaddr;
+	int				 flags;
+
+	struct mtx			 mtx;
+	struct callout			 watchdog;
+	int				 timer;
 };
+
+/* MTX macros */
+#define MGB_LOCK(_sc)		mtx_lock(_sc.mtx)
+#define MGB_UNLOCK(_sc)		mtx_unlock(_sc.mtx)
+#define MGB_LOCK_ASSERT(_sc)		mtx_assert(_sc.mtx, MA_OWNED)
+
+
+/* FLAGS */
+#define MGB_FLAG_INTX			0x00000000
+#define MGB_FLAG_MSI			0x00000001
+#define MGB_FLAG_MSIX			0x00000002
+
+#define MGB_INTR_FLAG_MASK		0x3
 
 #endif /* _IF_MGB_H_ */

@@ -109,7 +109,6 @@ static int	mgb_miibus_writereg(device_t, int, int, int);
 static int	mgb_ifmedia_upd(struct ifnet *);
 static void	mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 
-
 /* IFNET methods */
 static void	mgb_init(void *);
 static int	mgb_ioctl(if_t, u_long, caddr_t);
@@ -124,8 +123,6 @@ static int	mgb_phy_reset(struct mgb_softc *);
 /*
  * Probe for a mgb device. This is done by checking the device list.
  * If found, the name of the device is returned.
- *
- * IMPLEMENTS: (check_chip_id)
  */
 static int
 mgb_probe(device_t dev)
@@ -148,14 +145,49 @@ mgb_probe(device_t dev)
 static int
 mgb_test_bar(struct mgb_softc *sc)
 {
-	uint32_t id_rev = CSR_READ_REG(sc, 0x0);
-	if ((id_rev & 0xFFFF0000) == (0x7430 << 16) || (id_rev & 0xFFFF0000) == (0x7431 << 16)) {
+	/* Equivalent to chip_check_id */
+	uint32_t id_rev = CSR_READ_REG(sc, 0x0) >> 16;
+	if (id_rev == PCI_DEVICE_ID_LAN7430 || id_rev == PCI_DEVICE_ID_LAN7431) {
 		device_printf(sc->dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
 		return 0;
 	} else {
 		device_printf(sc->dev, "ID CHECK FAILED with ID (0x%x)\n", id_rev);
 		return ENXIO;
 	}
+}
+
+
+
+static void
+mgb_intr()
+{
+/* uint32_t intr_sts, intr_en; */
+#if 0
+	read status and enable registers
+	ensure that the inerrupt is for this device
+	check status bit for which intr handler to call
+	INT_BIT_TX0 -> transmit
+	INT_BIT_SW_GP -> test
+	and so foth
+#endif
+}
+
+
+static int
+mgb_intr_test()
+{
+	int flag;
+
+	flag = 0;
+#if 0
+	clear status
+	enable intr
+	trigger intr
+	wait on flag to be changed
+	disable interrupts
+	clear statsus
+#endif
+	return flag;
 }
 
 /*
@@ -166,23 +198,28 @@ static int
 mgb_attach(device_t dev)
 {
 	struct mgb_softc *sc;
-	uint8_t ethaddr[ETHER_ADDR_LEN] = {0};
+	uint8_t ethaddr[ETHER_ADDR_LEN];
 	int rid, error;
+	int msic, msixc;
 
 
 	error = 0;
 	sc = device_get_softc(dev);
 	sc->dev = dev;
-	/* Allocate bus resources for using PCI bus */
-	/* pci_enable_busmaster(dev); */
 
+	/* Prep mutex */
+	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
+	callout_init_mtx(&sc->watchdog, &sc->mtx, 0);
+
+	/* Allocate bus resources for using PCI bus */
 	sc->dev = dev;
 
-	rid = PCIR_BAR(MGB_BAR); /* combine PCI_BAR 0 and 1 */
+	rid = PCIR_BAR(MGB_BAR);
 	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
 	    &rid, RF_ACTIVE);
 	if (unlikely(sc->regs == NULL)) {
 		device_printf(dev, "Unable to allocate bus resource: registers.\n");
+		error = ENXIO;
 		goto fail;
 	}
 
@@ -200,6 +237,8 @@ mgb_attach(device_t dev)
 	sc->ifp = if_alloc(IFT_ETHER);
 	if(unlikely(sc->ifp == NULL)) {
 		device_printf(dev, "Unable to allocate ifnet structure.");
+		error = ENXIO;
+		goto fail;
 	}
 	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
 
@@ -214,14 +253,49 @@ mgb_attach(device_t dev)
 		device_printf(dev, "Failed to attach MII interface");
 		goto fail;
 	}
-	device_printf(dev, "Attached MII interface\n");
 
-	/* UPD */
-	/* END OF UPD */
-	/* STS */
+	rid = 0; /* use INTx interrupts by default */
+	msic = pci_msi_count(dev);
+	msixc = pci_msix_count(dev);
 
-
-	/* END OF STS */
+	/* MSIX > MSI > INTx */
+	if (msixc > 0) {
+		msixc = 1; /* Request only one line */
+		if(pci_alloc_msix(dev, &msixc) == 0) {
+			if(msixc == 1) {
+				sc->flags |= MGB_FLAG_MSIX;
+				rid = 1;
+				device_printf(dev, "Using 1 MSI-X lane.");
+			}
+			else {
+				pci_release_msi(dev);
+				msixc = 0;
+			}
+		}
+	}
+	if (msixc == 0 && msic > 0) {
+		msic = 1; /* Request only one line */
+		if(pci_alloc_msi(dev, &msic) == 0) {
+			if(msic == 1) {
+				sc->flags |= MGB_FLAG_MSI;
+				rid = 1;
+				device_printf(dev, "Using 1 MSI lane.");
+			}
+			else {
+				pci_release_msi(dev);
+				msic = 0;
+			}
+		}
+	}
+	sc->irq.res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_SHAREABLE | RF_ACTIVE);
+	if (unlikely(sc->irq.res == NULL)) {
+		device_printf(dev, "Unable to allocate bus resource: interrupts\n");
+		error = ENXIO;
+		goto fail;
+	}
+	/*
+	 * Should be sysctl tunable
+	 */
 
 	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
 	if_setdev(sc->ifp, dev);
@@ -229,26 +303,17 @@ mgb_attach(device_t dev)
 
 	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
 	if_setinitfn(sc->ifp, mgb_init);
-	/* if_settransmitfn(sc->ifp, mgb_mq_start); */
-	/* if_setqflushfn(sc->ifp, mgb_qflush); */
+	/* if_settransmitfn*/
+	/* if_setqflushfn */
 	if_setioctlfn(sc->ifp, mgb_ioctl);
-	/* if_setgetcounterfn(sc->ifp, ena_get_counter); */
+	/* if_setgetcounterfn */
 
-	/* if_setsendqlen(sc->ifp, sc->tx_ring_size); */
-	/* if_setsendqready(sc->ifp); */
-	/* if_setmtu(sc->ifp, ETHERMTU); */
-	if_setbaudrate(sc->ifp, 0);
-	if_setcapabilities(sc->ifp, 0); /* ? */
-	if_setcapenable(sc->ifp, 0);
-
-
-	/* SHOULDN'T NEED BECAUSE MII IS USED
-	 *
-	ifmedia_init(&sc->media, IFM_IMASK,
-	    mgb_media_change, mgb_media_status);
-	ifmedia_add(&sc->media, IFM_ETHER | IFM_AUTO, 0, NULL);
-	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
-	*/
+	/* if_setsendqlen( */
+	/* if_setsendqready */
+	if_setmtu(sc->ifp, ETHERMTU);
+	if_setbaudrate(sc->ifp, IF_Mbps(1000));
+	if_setcapabilities(sc->ifp, IFCAP_HWCSUM | IFCAP_VLAN_MTU | IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTAGGING ); /* Doesn't show up on ifconfig? */
+	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
 
 	ether_ifattach(sc->ifp, ethaddr);
 	device_printf(dev, "DEVICE ATTACHED SUCCESSFULLY\n");
@@ -270,7 +335,7 @@ mgb_ifmedia_upd(struct ifnet *ifp)
 	int error;
 
 	sc = ifp->if_softc;
-	
+
 	miid = device_get_softc(sc->miibus);
 	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
 		PHY_RESET(miisc);
@@ -286,7 +351,7 @@ mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 	struct mgb_softc *sc;
 
 	sc = ifp->if_softc;
-	
+
 	miid = device_get_softc(sc->miibus);
 	mii_pollstat(miid);
 	ifmr->ifm_active = miid->mii_media_active;
@@ -297,16 +362,21 @@ static int
 mgb_detach(device_t dev)
 {
 	struct mgb_softc *sc;
+	int uses_msi;
 
 	sc = device_get_softc(dev);
-	/* detach ethernet i/f */
-	/* turn off device */
-	/* -> turn off interrupts */
-	/* -> clear sts/ctrl registers */
-	/* -> clear/remove buffers */
-	/* remove watchdogs */
-	if(device_is_attached(dev))
+#if 0
+	turn off device
+	 -> turn off interrupts
+	 -> clear sts/ctrl registers
+	 -> clear/remove buffers
+	remove watchdogs
+#endif
+	uses_msi = (sc->flags & MGB_INTR_FLAG_MASK) != MGB_FLAG_INTX;
+	if(device_is_attached(dev)) {
 		ether_ifdetach(sc->ifp);
+		callout_drain(&sc->watchdog);
+	}
 
 	if(sc->miibus)
 		device_delete_child(dev, sc->miibus);
@@ -315,10 +385,17 @@ mgb_detach(device_t dev)
 	if(sc->regs)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    PCIR_BAR(MGB_BAR), sc->regs);
+	if(sc->irq.res)
+		bus_release_resource(dev, SYS_RES_IRQ,
+		    uses_msi ? 1 : 0, sc->irq.res);
+
+	if(uses_msi)
+		pci_release_msi(dev);
+
 	if(sc->ifp)
 		if_free(sc->ifp);
 	/* DMA free */
-	/* mtx destroy */
+	mtx_destroy(&sc->mtx);
 #if 0
 	kdb_enter(KDB_WHY_UNSET, "Something failed in MGB so entering debugger...");
 #endif
@@ -344,18 +421,27 @@ mgb_init(void *arg)
 	struct mgb_softc *sc;
 
 	sc = (struct mgb_softc *)arg;
-	/* Lock SC */
-	/* Interrupts, DMA queues, buffer init, load station addr etc. */
-	/* Unlock SC */
+#if 0
+	Lock SC
+	Interrupts, DMA queues, buffer init, load station addr etc.
+	Unlock SC
+#endif
+	sc->ifp->if_drv_flags |= IFF_DRV_RUNNING;
+	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+	device_printf(sc->dev, "Device should be running now.");
+
 }
 
 static int
 mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 {
 	int error;
-	/* get softc from ifp */
-	/* get ifr from data */
-	/* switch on `command` */
+#if 0
+	get softc from ifp
+	get ifr from data
+
+	switch on `command`
+#endif
 	error = ether_ioctl(ifp, command, data);
 	return (error);
 }
