@@ -1,8 +1,11 @@
 /*-
- * SPDX-License-Identifier: BSD-4-Clause
+ * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2015-2017 Amazon.com, Inc. or its affiliates.
- * All rights reserved.
+ * Copyright (c) 2019 The FreeBSD Foundation, Inc.
+ *
+ * This driver was written by
+ * Gerald ND Aryeetey <gndaryee@uwaterloo.ca> under sponsorship
+ * from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -72,64 +75,63 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/miivar.h>
 #include "miibus_if.h"
 
-#include <dev/lan743x/lan743x.h>
+#include <dev/mgb/mgb.h>
 
 /*
  * List here so that you can easily do device recon
  */
-static struct lan743x_vendor_info lan743x_vendor_info_array[] = {
-	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7430, "Microchip LAN7430 PCIe Gigabit Ethernet Controller" }, /* defined in reg.h */
+static struct mgb_vendor_info mgb_vendor_info_array[] = {
+	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7430, "Microchip LAN7430 PCIe Gigabit Ethernet Controller" },
 	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7431, "Microchip LAN7431 PCIe Gigabit Ethernet Controller" },
 	{ 0, 0, NULL }
 };
 
 /* PCI methods */
-static int	lan743x_probe(device_t);
-static int	lan743x_attach(device_t);
-static int	lan743x_detach(device_t);
-/* static int	lan743x_shutdown(device_t); */
-/* static int	lan743x_suspend(device_t); */
-/* static int	lan743x_resume(device_t); */
+static int	mgb_probe(device_t);
+static int	mgb_attach(device_t);
+static int	mgb_detach(device_t);
+/* static int	mgb_shutdown(device_t); */
+/* static int	mgb_suspend(device_t); */
+/* static int	mgb_resume(device_t); */
 
 /* MSI Interrupts support */
-static int	lan743x_test_bar(struct lan743x_softc *);
+static int	mgb_test_bar(struct mgb_softc *);
 
 /* MAC support */
-static void	lan743x_get_ethaddr(struct lan743x_softc *, caddr_t);
+static void	mgb_get_ethaddr(struct mgb_softc *, caddr_t);
 
 
 /* MII methods */
-static int	lan743x_miibus_readreg(device_t, int, int);
-static int	lan743x_miibus_writereg(device_t, int, int, int);
+static int	mgb_miibus_readreg(device_t, int, int);
+static int	mgb_miibus_writereg(device_t, int, int, int);
 
 /* MII MEDIA support */
-static int	lan743x_ifmedia_upd(struct ifnet *);
-static void	lan743x_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+static int	mgb_ifmedia_upd(struct ifnet *);
+static void	mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 
 
 /* IFNET methods */
-static void	lan743x_init(void *);
-static int	lan743x_ioctl(if_t, u_long, caddr_t);
+static void	mgb_init(void *);
+static int	mgb_ioctl(if_t, u_long, caddr_t);
 
 /* HW reset helper functions */
-static int	lan743x_hw_init(device_t);
-static int	lan743x_hw_reset(struct lan743x_softc *);
-static int	lan743x_mac_init(struct lan743x_softc *);
-static int	lan743x_dmac_reset(struct lan743x_softc *);
-static int	lan743x_phy_reset(struct lan743x_softc *);
+static int	mgb_hw_init(device_t);
+static int	mgb_hw_reset(struct mgb_softc *);
+static int	mgb_mac_init(struct mgb_softc *);
+static int	mgb_dmac_reset(struct mgb_softc *);
+static int	mgb_phy_reset(struct mgb_softc *);
 
 /*
- * Probe for a lan743x device. This is done by checking the device list.
+ * Probe for a mgb device. This is done by checking the device list.
  * If found, the name of the device is returned.
  *
  * IMPLEMENTS: (check_chip_id)
  */
 static int
-lan743x_probe(device_t dev)
+mgb_probe(device_t dev)
 {
-	struct lan743x_vendor_info *currvendor;
-
-	currvendor = lan743x_vendor_info_array;
+	struct mgb_vendor_info *currvendor;
+	currvendor = mgb_vendor_info_array;
 
 	while(currvendor->name != NULL) {
 		if((pci_get_vendor(dev) == currvendor->vid) &&
@@ -141,32 +143,29 @@ lan743x_probe(device_t dev)
 	}
 
 	return (ENXIO); /* No such device or address */
-
 }
 
 static int
-lan743x_test_bar(struct lan743x_softc *sc)
+mgb_test_bar(struct mgb_softc *sc)
 {
-
-	/* Alloc bar 0 */
-	/* check_chip_id() */
-	/* dealloc */
-	/* ret if is bar 0 */
-	/* Alloc bar 1 */
-	/* check_chip_id() */
-	/* dealloc */
-	/* ret if is bar 1 */
-	return (0);
+	uint32_t id_rev = CSR_READ_REG(sc, 0x0);
+	if ((id_rev & 0xFFFF0000) == (0x7430 << 16) || (id_rev & 0xFFFF0000) == (0x7431 << 16)) {
+		device_printf(sc->dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
+		return 0;
+	} else {
+		device_printf(sc->dev, "ID CHECK FAILED with ID (0x%x)\n", id_rev);
+		return ENXIO;
+	}
 }
 
 /*
- * Attach to a lan743x device.
+ * Attach to a mgb device.
  * => Initialize many a variable
  */
 static int
-lan743x_attach(device_t dev)
+mgb_attach(device_t dev)
 {
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 	uint8_t ethaddr[ETHER_ADDR_LEN] = {0};
 	int rid, error;
 
@@ -179,27 +178,22 @@ lan743x_attach(device_t dev)
 
 	sc->dev = dev;
 
-	rid = PCIR_BAR(LAN743X_BAR); /* combine PCI_BAR 0 and 1 */
+	rid = PCIR_BAR(MGB_BAR); /* combine PCI_BAR 0 and 1 */
 	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
 	    &rid, RF_ACTIVE);
 	if (unlikely(sc->regs == NULL)) {
 		device_printf(dev, "Unable to allocate bus resource: registers.\n");
 		goto fail;
 	}
-	
-	/** Verify that this is the correct BAR **/
-	uint32_t id_rev = CSR_READ_REG(sc, 0x0);
-	if ((id_rev & 0xFFFF0000) == (0x7430 << 16) || (id_rev & 0xFFFF0000) == (0x7431 << 16)) {
-		device_printf(dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
-	} else {
-		device_printf(dev, "ID CHECK FAILED with ID (0x%x)\n", id_rev);
-		error = ENXIO;
-		goto fail;
-	}
 
-	error = lan743x_hw_init(dev);
+	/** Verify that this is the correct BAR **/
+	error = mgb_test_bar(sc);
+	if(unlikely(error != 0))
+		goto fail;
+
+	error = mgb_hw_init(dev);
 	if (unlikely(error != 0)) {
-		device_printf(dev, "LAN743X device init failed. (err: %d)\n", error);
+		device_printf(dev, "MGB device init failed. (err: %d)\n", error);
 		goto fail;
 	}
 
@@ -207,12 +201,12 @@ lan743x_attach(device_t dev)
 	if(unlikely(sc->ifp == NULL)) {
 		device_printf(dev, "Unable to allocate ifnet structure.");
 	}
-	lan743x_get_ethaddr(sc, (caddr_t)ethaddr);
+	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
 
 	/* Attach MII Interface */
 #if 0
-	error = mii_attach(dev, &sc->miibus, sc->ifp, lan743x_ifmedia_upd,
-	    lan743x_ifmedia_sts, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
+	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
+	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
 #endif
 	error = mii_attach(dev, &sc->miibus, sc->ifp, NULL,
 	    NULL, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
@@ -234,10 +228,10 @@ lan743x_attach(device_t dev)
 	if_setsoftc(sc->ifp, sc);
 
 	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
-	if_setinitfn(sc->ifp, lan743x_init);
-	/* if_settransmitfn(sc->ifp, lan743x_mq_start); */
-	/* if_setqflushfn(sc->ifp, lan743x_qflush); */
-	if_setioctlfn(sc->ifp, lan743x_ioctl);
+	if_setinitfn(sc->ifp, mgb_init);
+	/* if_settransmitfn(sc->ifp, mgb_mq_start); */
+	/* if_setqflushfn(sc->ifp, mgb_qflush); */
+	if_setioctlfn(sc->ifp, mgb_ioctl);
 	/* if_setgetcounterfn(sc->ifp, ena_get_counter); */
 
 	/* if_setsendqlen(sc->ifp, sc->tx_ring_size); */
@@ -251,7 +245,7 @@ lan743x_attach(device_t dev)
 	/* SHOULDN'T NEED BECAUSE MII IS USED
 	 *
 	ifmedia_init(&sc->media, IFM_IMASK,
-	    lan743x_media_change, lan743x_media_status);
+	    mgb_media_change, mgb_media_status);
 	ifmedia_add(&sc->media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
 	*/
@@ -261,18 +255,18 @@ lan743x_attach(device_t dev)
 
 fail:
 	if (error)
-		lan743x_detach(dev);
+		mgb_detach(dev);
 
 	return (error);
 }
 
 
 static int
-lan743x_ifmedia_upd(struct ifnet *ifp)
+mgb_ifmedia_upd(struct ifnet *ifp)
 {
 	struct mii_data	*miid;
 	struct mii_softc *miisc;
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 	int error;
 
 	sc = ifp->if_softc;
@@ -286,10 +280,10 @@ lan743x_ifmedia_upd(struct ifnet *ifp)
 }
 
 static void
-lan743x_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
 	struct mii_data	*miid;
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 
 	sc = ifp->if_softc;
 	
@@ -300,9 +294,9 @@ lan743x_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 }
 
 static int
-lan743x_detach(device_t dev)
+mgb_detach(device_t dev)
 {
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 
 	sc = device_get_softc(dev);
 	/* detach ethernet i/f */
@@ -320,13 +314,13 @@ lan743x_detach(device_t dev)
 
 	if(sc->regs)
 		bus_release_resource(dev, SYS_RES_MEMORY,
-		    PCIR_BAR(LAN743X_BAR), sc->regs);
+		    PCIR_BAR(MGB_BAR), sc->regs);
 	if(sc->ifp)
 		if_free(sc->ifp);
 	/* DMA free */
 	/* mtx destroy */
 #if 0
-	kdb_enter(KDB_WHY_UNSET, "Something failed in LAN743X so entering debugger...");
+	kdb_enter(KDB_WHY_UNSET, "Something failed in MGB so entering debugger...");
 #endif
 	return (0);
 
@@ -334,29 +328,29 @@ lan743x_detach(device_t dev)
 }
 
 static void
-lan743x_get_ethaddr(struct lan743x_softc *sc, caddr_t dest)
+mgb_get_ethaddr(struct mgb_softc *sc, caddr_t dest)
 {
 	/* This should read the bytes of mac address one at a time
 	 * so endianness shouldn't be an issue ... (each bus_read method)
 	 * is defined at the device level.
 	 */
-	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE_L, dest, 4);
-	CSR_READ_REG_BYTES(sc, LAN743X_MAC_ADDR_BASE_H, dest + 4, 2);
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, dest, 4);
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, dest + 4, 2);
 }
 
 static void
-lan743x_init(void *arg)
+mgb_init(void *arg)
 {
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 
-	sc = (struct lan743x_softc *)arg;
+	sc = (struct mgb_softc *)arg;
 	/* Lock SC */
 	/* Interrupts, DMA queues, buffer init, load station addr etc. */
 	/* Unlock SC */
 }
 
 static int
-lan743x_ioctl(if_t ifp, u_long command, caddr_t data)
+mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 {
 	int error;
 	/* get softc from ifp */
@@ -367,23 +361,23 @@ lan743x_ioctl(if_t ifp, u_long command, caddr_t data)
 }
 
 static int
-lan743x_hw_init(device_t dev)
+mgb_hw_init(device_t dev)
 {
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 	int error = 0;
 
 	sc = device_get_softc(dev);
-	error = lan743x_hw_reset(sc);
+	error = mgb_hw_reset(sc);
 	if(unlikely(error != 0))
 		goto fail;
 
-	lan743x_mac_init(sc);
+	mgb_mac_init(sc);
 
-	error = lan743x_phy_reset(sc);
+	error = mgb_phy_reset(sc);
 	if(unlikely(error != 0))
 		goto fail;
 
-	error = lan743x_dmac_reset(sc);
+	error = mgb_dmac_reset(sc);
 	if(unlikely(error != 0))
 		goto fail;
 
@@ -393,24 +387,24 @@ fail:
 }
 
 static int
-lan743x_hw_reset(struct lan743x_softc *sc)
+mgb_hw_reset(struct mgb_softc *sc)
 {
 	int i;
-	CSR_UPDATE_REG(sc, LAN743X_HW_CFG, LAN743X_LITE_RESET);
+	CSR_UPDATE_REG(sc, MGB_HW_CFG, MGB_LITE_RESET);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10); /* > 5us delay */
-		if(!(CSR_READ_REG(sc, LAN743X_HW_CFG) & LAN743X_LITE_RESET))
+		if(!(CSR_READ_REG(sc, MGB_HW_CFG) & MGB_LITE_RESET))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 1;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return LAN743X_STS_OK;
+	return MGB_STS_OK;
 }
 
 static int
-lan743x_mac_init(struct lan743x_softc *sc)
+mgb_mac_init(struct mgb_softc *sc)
 {
 	/**
 	 * enable automatic duplex detection and
@@ -418,99 +412,99 @@ lan743x_mac_init(struct lan743x_softc *sc)
 	 */
 	CSR_UPDATE_REG(
 		sc,
-		LAN743X_MAC_CR,
-		LAN743X_MAC_ADD_ENBL | LAN743X_MAC_ASD_ENBL
+		MGB_MAC_CR,
+		MGB_MAC_ADD_ENBL | MGB_MAC_ASD_ENBL
 	);
-	return LAN743X_STS_OK;
+	return MGB_STS_OK;
 }
 
 
 static int
-lan743x_phy_reset(struct lan743x_softc *sc)
+mgb_phy_reset(struct mgb_softc *sc)
 {
 	int i;
 	CSR_UPDATE_BYTE(
 		sc,
-		LAN743X_PMT_CTL,
-		LAN743X_PHY_RESET
+		MGB_PMT_CTL,
+		MGB_PHY_RESET
 	);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10); /* 2ms max */
-		if(!(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_RESET))
+		if(!(CSR_READ_BYTE(sc, MGB_PMT_CTL) & MGB_PHY_RESET))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 21;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
-		if(CSR_READ_BYTE(sc, LAN743X_PMT_CTL) & LAN743X_PHY_READY)
+	for(i = 0; i < MGB_TIMEOUT; i++) {
+		if(CSR_READ_BYTE(sc, MGB_PMT_CTL) & MGB_PHY_READY)
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 2;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return LAN743X_STS_OK;
+	return MGB_STS_OK;
 }
 
 static int
-lan743x_dmac_reset(struct lan743x_softc *sc)
+mgb_dmac_reset(struct mgb_softc *sc)
 {
 	int i;
-	CSR_WRITE_REG(sc, LAN743X_DMAC_CMD, LAN743X_DMAC_RESET);
+	CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RESET);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
-		if(!(CSR_READ_REG(sc, LAN743X_DMAC_CMD) & LAN743X_DMAC_RESET))
+		if(!(CSR_READ_REG(sc, MGB_DMAC_CMD) & MGB_DMAC_RESET))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 3;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return LAN743X_STS_OK;
+	return MGB_STS_OK;
 }
 
 static int
-lan743x_miibus_readreg(device_t dev, int phy, int reg)
+mgb_miibus_readreg(device_t dev, int phy, int reg)
 {
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 	int i;
 
 	sc = device_get_softc(dev);
 
 	/* for 7430 must be 1, for 7431 must be external phy */
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
-		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 4;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	CSR_WRITE_REG(sc, LAN743X_MII_ACCESS,
-	    ((phy & LAN743X_MII_PHY_ADDR_MASK) << LAN743X_MII_PHY_ADDR_SHIFT) |
-	    ((reg & LAN743X_MII_REG_ADDR_MASK) << LAN743X_MII_REG_ADDR_SHIFT) |
-	    LAN743X_MII_READ | LAN743X_MII_BUSY
+	CSR_WRITE_REG(sc, MGB_MII_ACCESS,
+	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
+	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
+	    MGB_MII_READ | MGB_MII_BUSY
 	);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
-		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return 5;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return (int)(CSR_READ_2_BYTES(sc, LAN743X_MII_DATA));
+	return (int)(CSR_READ_2_BYTES(sc, MGB_MII_DATA));
 }
 
 static int
-lan743x_miibus_writereg(device_t dev, int phy, int reg, int data)
+mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 {
 
-	struct lan743x_softc *sc;
+	struct mgb_softc *sc;
 	int i, error;
 
 	sc = device_get_softc(dev);
@@ -518,27 +512,27 @@ lan743x_miibus_writereg(device_t dev, int phy, int reg, int data)
 
 	/* for 7430 must be 1, for 7431 must be external phy */
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
-		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return EIO;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	CSR_WRITE_REG(sc, LAN743X_MII_DATA, data);
-	CSR_WRITE_REG(sc, LAN743X_MII_ACCESS,
-	    ((phy & LAN743X_MII_PHY_ADDR_MASK) << LAN743X_MII_PHY_ADDR_SHIFT) |
-	    ((reg & LAN743X_MII_REG_ADDR_MASK) << LAN743X_MII_REG_ADDR_SHIFT) |
-	    LAN743X_MII_WRITE | LAN743X_MII_BUSY
+	CSR_WRITE_REG(sc, MGB_MII_DATA, data);
+	CSR_WRITE_REG(sc, MGB_MII_ACCESS,
+	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
+	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
+	    MGB_MII_WRITE | MGB_MII_BUSY
 	);
 	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < LAN743X_TIMEOUT; i++) {
+	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
-		if(!(CSR_READ_REG(sc, LAN743X_MII_ACCESS) & LAN743X_MII_BUSY))
+		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == LAN743X_TIMEOUT)
+	if (i == MGB_TIMEOUT)
 		return EIO;
 	/* END OF CHECK_UNTIL_TIMEOUT */
 	return 0;
@@ -550,38 +544,38 @@ lan743x_miibus_writereg(device_t dev, int phy, int reg, int data)
  *  FreeBSD Device Interface Entry Points
  *********************************************************************/
 
-static device_method_t lan743x_methods[] = {
+static device_method_t mgb_methods[] = {
 	/* Device interface */
-	DEVMETHOD(device_probe,		lan743x_probe),
-	DEVMETHOD(device_attach,	lan743x_attach),
-	DEVMETHOD(device_detach,	lan743x_detach),
-	/* DEVMETHOD(device_shutdown,	lan743x_shutdown), */
-	/* DEVMETHOD(device_suspend,	lan743x_suspend),  */
-	/* DEVMETHOD(device_resume,	lan743x_resume),   */
+	DEVMETHOD(device_probe,		mgb_probe),
+	DEVMETHOD(device_attach,	mgb_attach),
+	DEVMETHOD(device_detach,	mgb_detach),
+	/* DEVMETHOD(device_shutdown,	mgb_shutdown), */
+	/* DEVMETHOD(device_suspend,	mgb_suspend),  */
+	/* DEVMETHOD(device_resume,	mgb_resume),   */
 
 
 	/* MII Interface */
-	DEVMETHOD(miibus_readreg,	lan743x_miibus_readreg),
-	DEVMETHOD(miibus_writereg,	lan743x_miibus_writereg),
+	DEVMETHOD(miibus_readreg,	mgb_miibus_readreg),
+	DEVMETHOD(miibus_writereg,	mgb_miibus_writereg),
 
 	DEVMETHOD_END
 };
 
-static driver_t lan743x_driver = {
-	"lan743x",
-	lan743x_methods,
-	sizeof(struct lan743x_softc)
+static driver_t mgb_driver = {
+	"mgb",
+	mgb_methods,
+	sizeof(struct mgb_softc)
 };
 
-devclass_t lan743x_devclass;
-DRIVER_MODULE(lan743x, pci, lan743x_driver, lan743x_devclass, 0, 0);
+devclass_t mgb_devclass;
+DRIVER_MODULE(mgb, pci, mgb_driver, mgb_devclass, 0, 0);
 
-MODULE_PNP_INFO("U16:vendor;U16:device", pci, lan743x, lan743x_vendor_info_array,
-    nitems(lan743x_vendor_info_array) - 1);
+MODULE_PNP_INFO("U16:vendor;U16:device", pci, mgb, mgb_vendor_info_array,
+    nitems(mgb_vendor_info_array) - 1);
 
-MODULE_DEPEND(lan743x, pci, 1, 1, 1);
-MODULE_DEPEND(lan743x, ether, 1, 1, 1);
-MODULE_DEPEND(lan743x, miibus, 1, 1, 1);
+MODULE_DEPEND(mgb, pci, 1, 1, 1);
+MODULE_DEPEND(mgb, ether, 1, 1, 1);
+MODULE_DEPEND(mgb, miibus, 1, 1, 1);
 
 /*********************************************************************/
 
