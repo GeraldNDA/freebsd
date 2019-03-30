@@ -113,6 +113,11 @@ static void	mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 static void	mgb_init(void *);
 static int	mgb_ioctl(if_t, u_long, caddr_t);
 
+/* Interrupt helper functions */
+static void 	mgb_intr_enable(struct mgb_softc *);
+static void 	mgb_intr_disable(struct mgb_softc *);
+static int 	mgb_intr_test(struct mgb_softc *);
+
 /* HW reset helper functions */
 static int	mgb_hw_init(device_t);
 static int	mgb_hw_reset(struct mgb_softc *);
@@ -156,12 +161,18 @@ mgb_test_bar(struct mgb_softc *sc)
 	}
 }
 
-
+static int isr_test_flag;
 
 static void
 mgb_intr()
 {
-/* uint32_t intr_sts, intr_en; */
+	uint32_t intr_sts, intr_en;
+	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
+	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
+
+	intr_sts &= intr_en;
+	if((intr_sts & MGB_INTR_STS_ANY) == 0)
+
 #if 0
 	read status and enable registers
 	ensure that the inerrupt is for this device
@@ -174,11 +185,22 @@ mgb_intr()
 
 
 static int
-mgb_intr_test()
+mgb_intr_test(struct mgb_softc *sc)
 {
-	int flag;
+	isr_test_flag = 0;
 
 	flag = 0;
+	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TEST);
+	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
+	for (i = 0; i < MGB_TIMEOUT; i++) {
+		DELAY(10);
+		if(isr_test_flag != 0)
+			break;
+	}
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, MGB_INTR_STS_TEST);
+	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
+
 #if 0
 	clear status
 	enable intr
@@ -190,6 +212,23 @@ mgb_intr_test()
 	return flag;
 }
 
+static void
+mgb_intr_enable(struct mgb_softc *sc)
+{
+	/* Ensure interrupts disabled */
+	mgb_intr_disable(sc);
+#if 0
+	/* Register IRQ */
+#endif
+	/* Enable IRQs */
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY);
+}
+static void
+mgb_intr_disable(struct mgb_softc *sc)
+{
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0x0);
+	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0x0);
+}
 /*
  * Attach to a mgb device.
  * => Initialize many a variable
@@ -315,6 +354,11 @@ mgb_attach(device_t dev)
 	if_setcapabilities(sc->ifp, IFCAP_HWCSUM | IFCAP_VLAN_MTU | IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTAGGING ); /* Doesn't show up on ifconfig? */
 	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
 
+	mgb_intr_enable(sc);
+	/* Add IRQ handler */
+	bus_setup_intr(sc->dev, sc->irq.res, INTR_TYPE_NET|INTR_MPSAFE, NULL, mgb_intr, sc, &sc->irq.handler);
+	device_printf(sc->dev, "Interrupt test res: %d\n", mgb_intr_test(sc));
+
 	ether_ifattach(sc->ifp, ethaddr);
 	device_printf(dev, "DEVICE ATTACHED SUCCESSFULLY\n");
 
@@ -375,6 +419,7 @@ mgb_detach(device_t dev)
 	uses_msi = (sc->flags & MGB_INTR_FLAG_MASK) != MGB_FLAG_INTX;
 	if(device_is_attached(dev)) {
 		ether_ifdetach(sc->ifp);
+		mgb_intr_disable(sc);
 		callout_drain(&sc->watchdog);
 	}
 
@@ -385,10 +430,12 @@ mgb_detach(device_t dev)
 	if(sc->regs)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    PCIR_BAR(MGB_BAR), sc->regs);
+
+	if(sc->irq.handler)
+		bus_teardown_intr(dev, sc->irq.res, sc->irq.handler);
 	if(sc->irq.res)
 		bus_release_resource(dev, SYS_RES_IRQ,
 		    uses_msi ? 1 : 0, sc->irq.res);
-
 	if(uses_msi)
 		pci_release_msi(dev);
 
@@ -428,7 +475,7 @@ mgb_init(void *arg)
 #endif
 	sc->ifp->if_drv_flags |= IFF_DRV_RUNNING;
 	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
-	device_printf(sc->dev, "Device should be running now.");
+	device_printf(sc->dev, "Device should be running now.\n");
 
 }
 

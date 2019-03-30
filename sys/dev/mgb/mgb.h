@@ -29,6 +29,8 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 #ifndef _IF_MGB_H_
 #define _IF_MGB_H_
@@ -136,7 +138,7 @@ struct mgb_vendor_info {
 
 struct mgb_irq {
 	struct resource			*res;
-	driver_intr_t			*handler;
+	void				*handler;
 };
 
 struct mgb_softc {
