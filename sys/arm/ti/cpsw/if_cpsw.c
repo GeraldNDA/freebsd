@@ -744,8 +744,11 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
+	device_printf(sc->dev, "Looking for phy address ....\n");
+
 	if (fdt_get_phyaddr(sc->node, NULL, &phy, NULL) != 0)
 		return (ENXIO);
+	device_printf(sc->dev, "Found it.\n");
 
 	/* Find any slave with vlan (is it still correct ???) */
 	vlan = -1;
