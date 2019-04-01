@@ -744,6 +744,7 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
+	device_printf(sc->dev, "trying to get info for %s\n", ofw_bus_get_name(sc->node));
 	/* Find any slave with vlan (is it still correct ???) */
 	vlan = -1;
 
@@ -757,6 +758,8 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 		OF_prop_free(name);
 		if (mdio_child_addr != slave_mdio_addr[port])
 			continue;
+
+		device_printf(sc->dev, "trying to get info for %s\n", ofw_bus_get_name(OF_device_from_xref(child)));
 
 		if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0)
 			return (ENXIO);
