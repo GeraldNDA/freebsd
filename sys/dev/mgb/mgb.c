@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/sockio.h>
 #include <sys/kdb.h>
 
 /* Needed for KLD */
@@ -161,17 +162,28 @@ mgb_test_bar(struct mgb_softc *sc)
 	}
 }
 
-static int isr_test_flag;
+static int isr_test_flag = 0;
 
 static void
-mgb_intr()
+mgb_intr(void * arg)
 {
+	struct mgb_softc *sc;
 	uint32_t intr_sts, intr_en;
+
+
+	sc = arg;
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
 
 	intr_sts &= intr_en;
 	if((intr_sts & MGB_INTR_STS_ANY) == 0)
+		return;
+	if(intr_sts &  MGB_INTR_STS_TEST) {
+		isr_test_flag = 1;
+		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
+	}
+
+
 
 #if 0
 	read status and enable registers
@@ -187,9 +199,9 @@ mgb_intr()
 static int
 mgb_intr_test(struct mgb_softc *sc)
 {
+	int i;
 	isr_test_flag = 0;
 
-	flag = 0;
 	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
@@ -209,7 +221,7 @@ mgb_intr_test(struct mgb_softc *sc)
 	disable interrupts
 	clear statsus
 #endif
-	return flag;
+	return isr_test_flag;
 }
 
 static void
@@ -282,12 +294,12 @@ mgb_attach(device_t dev)
 	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
 
 	/* Attach MII Interface */
-#if 0
 	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
 	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
-#endif
+#if 0
 	error = mii_attach(dev, &sc->miibus, sc->ifp, NULL,
 	    NULL, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
+#endif
 	if(unlikely(error != 0)) {
 		device_printf(dev, "Failed to attach MII interface");
 		goto fail;
@@ -357,7 +369,7 @@ mgb_attach(device_t dev)
 	mgb_intr_enable(sc);
 	/* Add IRQ handler */
 	bus_setup_intr(sc->dev, sc->irq.res, INTR_TYPE_NET|INTR_MPSAFE, NULL, mgb_intr, sc, &sc->irq.handler);
-	device_printf(sc->dev, "Interrupt test res: %d\n", mgb_intr_test(sc));
+	device_printf(sc->dev, "Interrupt test: %s\n", (mgb_intr_test(sc) == 1 ? "PASS" : "FAIL"));
 
 	ether_ifattach(sc->ifp, ethaddr);
 	device_printf(dev, "DEVICE ATTACHED SUCCESSFULLY\n");
@@ -373,33 +385,12 @@ fail:
 static int
 mgb_ifmedia_upd(struct ifnet *ifp)
 {
-	struct mii_data	*miid;
-	struct mii_softc *miisc;
-	struct mgb_softc *sc;
-	int error;
-
-	sc = ifp->if_softc;
-
-	miid = device_get_softc(sc->miibus);
-	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
-		PHY_RESET(miisc);
-	/* SET MEDIA */
-	error = mii_mediachg(miid);
-	return error;
+	return 0;
 }
 
 static void
 mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
-	struct mii_data	*miid;
-	struct mgb_softc *sc;
-
-	sc = ifp->if_softc;
-
-	miid = device_get_softc(sc->miibus);
-	mii_pollstat(miid);
-	ifmr->ifm_active = miid->mii_media_active;
-	ifmr->ifm_status = miid->mii_media_status;
 }
 
 static int
@@ -468,13 +459,16 @@ mgb_init(void *arg)
 	struct mgb_softc *sc;
 
 	sc = (struct mgb_softc *)arg;
+	device_printf(sc->dev, "Running device init ...\n");
 #if 0
 	Lock SC
 	Interrupts, DMA queues, buffer init, load station addr etc.
 	Unlock SC
-#endif
+
+	These lines cause the IF interface to start being used ...!
 	sc->ifp->if_drv_flags |= IFF_DRV_RUNNING;
 	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+#endif
 	device_printf(sc->dev, "Device should be running now.\n");
 
 }
@@ -483,13 +477,56 @@ static int
 mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 {
 	int error;
-#if 0
-	get softc from ifp
-	get ifr from data
+	struct ifreq *ifr;
+	struct mgb_softc *sc;
+	struct mii_data *miid;
 
-	switch on `command`
+	sc = if_getsoftc(ifp);
+	miid = device_get_softc(sc->miibus);
+	if(miid == NULL)
+		device_printf(sc->dev, "miid is NULL");
+
+	ifr  = (struct ifreq *)data;
+
+#if 0
+	device_printf(sc->dev, "Starting IOCTL with command %lx, with %s data\n", command, data == NULL ? "no" : "some");
+
+	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFMTU", SIOCSIFMTU);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFFLAGS", SIOCSIFFLAGS);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCADDMULTI", SIOCADDMULTI);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCDELMULTI", SIOCDELMULTI);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCGIFMEDIA", SIOCGIFMEDIA);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFMEDIA", SIOCSIFMEDIA);
+	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFCAP", SIOCSIFCAP);
+	if (data)
+		device_printf(sc->dev, "DATA: %x:%x:%x:%x:%x:%x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
 #endif
-	error = ether_ioctl(ifp, command, data);
+	switch (command) {
+	case SIOCSIFFLAGS:
+		error = 0;
+		break;
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+		error = 0;
+		break;
+	case SIOCSIFMEDIA:
+	case SIOCGIFMEDIA:
+		if(!miid || !ifp || !ifr)
+			return EINVAL;
+		device_printf(sc->dev, "HMMMMMMMMMMMMMMMMMMM");
+		error = ifmedia_ioctl(ifp, ifr,  &miid->mii_media, command);
+		error = 0;
+		break;
+	case SIOCSIFCAP:
+		error = 0;
+		break;
+	case SIOCSIFMTU:
+		/* Default may be sufficient */
+	default:
+		error = ether_ioctl(ifp, command, data);
+		break;
+	}
+
 	return (error);
 }
 
