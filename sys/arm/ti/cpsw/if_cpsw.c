@@ -744,7 +744,7 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
-	device_printf(sc->dev, "trying to get info for %s\n", ofw_bus_get_name(sc->node));
+	device_printf(sc->dev, "trying to get info for %s\n", ofw_bus_get_name(OF_device_from_xref(sc->node)));
 	/* Find any slave with vlan (is it still correct ???) */
 	vlan = -1;
 	phy = -1;
