@@ -747,6 +747,7 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	device_printf(sc->dev, "trying to get info for %s\n", ofw_bus_get_name(sc->node));
 	/* Find any slave with vlan (is it still correct ???) */
 	vlan = -1;
+	phy = -1;
 
 	for (child = OF_child(sc->node); child != 0; child = OF_peer(child)) {
 		if (OF_getprop_alloc(child, "name", (void **)&name) < 0)
