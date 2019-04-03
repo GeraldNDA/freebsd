@@ -112,6 +112,8 @@ static void	mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 
 /* IFNET methods */
 static void	mgb_init(void *);
+static int	mgb_transmit_init(if_t, struct mbuf *);
+static void	mgb_qflush(if_t);
 static int	mgb_ioctl(if_t, u_long, caddr_t);
 
 /* Interrupt helper functions */
@@ -287,23 +289,42 @@ mgb_attach(device_t dev)
 
 	sc->ifp = if_alloc(IFT_ETHER);
 	if(unlikely(sc->ifp == NULL)) {
-		device_printf(dev, "Unable to allocate ifnet structure.");
+		device_printf(dev, "Unable to allocate ifnet structure.\n");
 		error = ENXIO;
 		goto fail;
 	}
 	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
 
 	/* Attach MII Interface */
+	int phyaddr;
+	switch(pci_get_device(dev))
+	{
+	case PCI_DEVICE_ID_LAN7430:
+		phyaddr = 1;
+		break;
+	case PCI_DEVICE_ID_LAN7431:
+	default:
+		phyaddr = MII_PHY_ANY;
+		break;
+	}
 	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
-	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
+	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
+	if(unlikely(error != 0)) {
+		device_printf(dev, "Failed to attach MII interface\n");
+		goto fail;
+	}
+	struct mii_data *miid;
+	miid = device_get_softc(sc->miibus);
+	if(miid->mii_media.ifm_status == NULL) {
+		error = EINVAL;
+		device_printf(dev, "ifm_status was not set!, miibus is attached? %s \n", device_is_attached(sc->miibus) ? "YES": "NO");
+		goto fail;
+	}
 #if 0
 	error = mii_attach(dev, &sc->miibus, sc->ifp, NULL,
 	    NULL, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
 #endif
-	if(unlikely(error != 0)) {
-		device_printf(dev, "Failed to attach MII interface");
-		goto fail;
-	}
+
 
 	rid = 0; /* use INTx interrupts by default */
 	msic = pci_msi_count(dev);
@@ -354,7 +375,8 @@ mgb_attach(device_t dev)
 
 	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
 	if_setinitfn(sc->ifp, mgb_init);
-	/* if_settransmitfn*/
+	if_settransmitfn(sc->ifp, mgb_transmit_init);
+	if_setqflushfn(sc->ifp, mgb_qflush);
 	/* if_setqflushfn */
 	if_setioctlfn(sc->ifp, mgb_ioctl);
 	/* if_setgetcounterfn */
@@ -385,12 +407,32 @@ fail:
 static int
 mgb_ifmedia_upd(struct ifnet *ifp)
 {
-	return 0;
+	struct mii_data *miid;
+	struct mii_softc *miisc;
+	struct mgb_softc *sc;
+
+	sc = if_getsoftc(ifp);
+	miid = device_get_softc(sc->miibus);
+	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
+		PHY_RESET(miisc);
+
+	return (mii_mediachg(miid));
 }
 
 static void
 mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
+	struct mgb_softc *sc;
+	struct mii_data *miid;
+
+	sc = if_getsoftc(ifp);
+	miid = device_get_softc(sc->miibus);
+	if((if_getflags(ifp) & IFF_UP) == 0)
+		return;
+
+	mii_pollstat(miid);
+	ifmr->ifm_active = miid->mii_media_active;
+	ifmr->ifm_status = miid->mii_media_status;
 }
 
 static int
@@ -457,8 +499,10 @@ static void
 mgb_init(void *arg)
 {
 	struct mgb_softc *sc;
+	struct mii_data *miid;
 
 	sc = (struct mgb_softc *)arg;
+	miid = device_get_softc(sc->miibus);
 	device_printf(sc->dev, "Running device init ...\n");
 #if 0
 	Lock SC
@@ -466,11 +510,36 @@ mgb_init(void *arg)
 	Unlock SC
 
 	These lines cause the IF interface to start being used ...!
+	if_setdrvflagbits(sc->ifp, IFF_DRV_RUNNING, IFF_DRV_OACTIVE)
+#endif
 	sc->ifp->if_drv_flags |= IFF_DRV_RUNNING;
 	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
-#endif
+	mii_mediachg(miid);
+	if(LIST_EMPTY(&miid->mii_phys))
+		device_printf(sc->dev, "NO PHYS!\n");
 	device_printf(sc->dev, "Device should be running now.\n");
 
+}
+
+static int
+mgb_transmit_init(if_t ifp, struct mbuf *m)
+{
+	struct mgb_softc *sc;
+
+	sc = if_getsoftc(ifp);
+	/* Run (3+ times) on mgb0 up */
+	device_printf(sc->dev, "Initialized transmit queues and whatnot.\n");
+	return 0;
+}
+
+static void
+mgb_qflush(if_t ifp)
+{
+	struct mgb_softc *sc;
+
+	sc = if_getsoftc(ifp);
+	/* Run (1+ times) on mgb0 down and kldunload mgb */
+	device_printf(sc->dev, "Running qflush...\n");
 }
 
 static int
@@ -488,19 +557,6 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 
 	ifr  = (struct ifreq *)data;
 
-#if 0
-	device_printf(sc->dev, "Starting IOCTL with command %lx, with %s data\n", command, data == NULL ? "no" : "some");
-
-	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFMTU", SIOCSIFMTU);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFFLAGS", SIOCSIFFLAGS);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCADDMULTI", SIOCADDMULTI);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCDELMULTI", SIOCDELMULTI);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCGIFMEDIA", SIOCGIFMEDIA);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFMEDIA", SIOCSIFMEDIA);
-	device_printf(sc->dev, "%s: %lx\n", "SIOCSIFCAP", SIOCSIFCAP);
-	if (data)
-		device_printf(sc->dev, "DATA: %x:%x:%x:%x:%x:%x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
-#endif
 	switch (command) {
 	case SIOCSIFFLAGS:
 		error = 0;
@@ -510,12 +566,61 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 		error = 0;
 		break;
 	case SIOCSIFMEDIA:
-	case SIOCGIFMEDIA:
-		if(!miid || !ifp || !ifr)
-			return EINVAL;
-		device_printf(sc->dev, "HMMMMMMMMMMMMMMMMMMM");
+		device_printf(sc->dev, "Attempted to set ifmedia\n");
 		error = ifmedia_ioctl(ifp, ifr,  &miid->mii_media, command);
-		error = 0;
+		break;
+	case SIOCGIFMEDIA:
+		device_printf(sc->dev, "Attempting to get ifmedia\n");
+		struct ifmedia *ifm = &miid->mii_media;
+		struct ifmediareq *ifmr = (struct ifmediareq *) ifr;
+		struct ifmedia_entry *ep;
+		int i;
+
+		if (ifmr->ifm_count < 0)
+			return (EINVAL);
+		if (ifm->ifm_cur) {
+			device_printf(sc->dev, "Converting to compat media\n");
+			device_printf(sc->dev, "IFM: %s -> IFM_CUR: %s -> IFM_MEDIA: %s",
+					ifm ? "good": "null",
+					ifm && ifm->ifm_cur ? "good": "null",
+					ifm && ifm->ifm_cur && ifm->ifm_cur->ifm_media ? "good": "null"
+					);
+			i = ifm->ifm_cur->ifm_media;
+			device_printf(sc->dev, "GOT MEDIA TYPE\n");
+			if (IFM_TYPE(i) == IFM_ETHER && IFM_SUBTYPE(i) > IFM_OTHER) {
+				i &= ~(IFM_ETH_XTYPE|IFM_TMASK);
+				i |= IFM_OTHER;
+			}
+			device_printf(sc->dev, "SUCCESS\n");
+		}
+		device_printf(sc->dev, "Setting values for ifmr\n");
+		ifmr->ifm_active = ifmr->ifm_current = ifm->ifm_cur ? i: IFM_NONE;
+		ifmr->ifm_mask = ifm->ifm_mask;
+		ifmr->ifm_status = 0;
+		device_printf(sc->dev, "SUCCESS\n");
+		device_printf(sc->dev, "Calling ifm->ifm_status\n");
+		(*ifm->ifm_status)(ifp, ifmr);
+		device_printf(sc->dev, "SUCCESS\n");
+
+		/*
+		 * If there are more interfaces on the list, count
+		 * them.  This allows the caller to set ifmr->ifm_count
+		 * to 0 on the first call to know how much space to
+		 * allocate.
+		 */
+		device_printf(sc->dev, "Doing other stuff with ifm_list\n");
+		i = 0;
+		LIST_FOREACH(ep, &ifm->ifm_list, ifm_list)
+			if (i++ < ifmr->ifm_count) {
+				error = copyout(&ep->ifm_media,
+				    ifmr->ifm_ulist + i - 1, sizeof(int));
+				if (error)
+					break;
+			}
+		if (error == 0 && i > ifmr->ifm_count)
+			error = ifmr->ifm_count ? E2BIG : 0;
+		ifmr->ifm_count = i;
+		device_printf(sc->dev, "SUCCESS\n");
 		break;
 	case SIOCSIFCAP:
 		error = 0;
@@ -640,6 +745,7 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 {
 	struct mgb_softc *sc;
 	int i;
+	int retval = -505;
 
 	sc = device_get_softc(dev);
 
@@ -650,24 +756,41 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == MGB_TIMEOUT)
-		return 4;
+	if (i == MGB_TIMEOUT) {
+		retval = -4;
+		goto done;
+	}
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	CSR_WRITE_REG(sc, MGB_MII_ACCESS,
+	int mii_access = (phy << 11) & 0xF800;
+	mii_access |= (reg << 6) & 0x7C0;
+	mii_access |= 0x1;
+	mii_access |= 0x0;
+#if 0
+	device_printf(dev, "Suggested mii_access (0x%x) vs mine (0x%x)\n", mii_access,
 	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
 	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
 	    MGB_MII_READ | MGB_MII_BUSY
-	);
+	    );
+#endif
+	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
 	/* CHECK_UNTIL_TIMEOUT */
 	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
 		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
 			break;
 	}
-	if (i == MGB_TIMEOUT)
-		return 5;
+	if (i == MGB_TIMEOUT) {
+		retval = -5;
+		goto done;
+	}
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	return (int)(CSR_READ_2_BYTES(sc, MGB_MII_DATA));
+#if 0
+	retval = (int)(CSR_READ_2_BYTES(sc, MGB_MII_DATA));
+#endif
+	retval = CSR_READ_REG(sc, MGB_MII_DATA) & 0xFFFF;
+done:
+	device_printf(dev, "READ '%d' from REG#%d from PHY#%d\n", retval, reg, phy);
+	return retval;
 }
 
 static int
@@ -705,6 +828,7 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	if (i == MGB_TIMEOUT)
 		return EIO;
 	/* END OF CHECK_UNTIL_TIMEOUT */
+	device_printf(dev, "WROTE %d from REG#%d from PHY#%d\n",data, reg, phy);
 	return 0;
 }
 

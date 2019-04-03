@@ -31,7 +31,6 @@
 #
 
 .PATH:	${SRCTOP}/sys/dev/mgb
-DEBUG_FLAGS = -pg
 
 KMOD	= mgb
 SRCS	= mgb.c
