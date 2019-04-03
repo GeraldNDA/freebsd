@@ -759,11 +759,8 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 		if (mdio_child_addr != slave_mdio_addr[port])
 			continue;
 
-		len = OF_getproplen(child, "phy-handle");
-		if (len / sizeof(pcell_t) == 1) {
-			if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0)
-				return (ENXIO);
-		}
+		if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0)
+			return (ENXIO);
 
 		len = OF_getproplen(child, "dual_emac_res_vlan");
 		if (len / sizeof(pcell_t) == 1) {
@@ -776,7 +773,8 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 
 		break;
 	}
-
+	if (phy == -1)
+		return (ENXIO);
 	sc->port[port].phy = phy;
 	sc->port[port].vlan = vlan;
 
