@@ -740,11 +740,11 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 {
 	char *name;
 	int len, phy, vlan;
-	pcell_t vlan_id;
+	pcell_t phy_id[3], vlan_id;
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
-	/* Find any slave with phy-handle */
+	/* Find any slave with phy-handle/phy_id */
 	phy = -1;
 	vlan = -1;
 
@@ -759,8 +759,16 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 		if (mdio_child_addr != slave_mdio_addr[port])
 			continue;
 
-		if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0)
-			return (ENXIO);
+		if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0){
+			/* Users with old DTB will have phy_id instead */
+			phy = -1;
+			len = OF_getproplen(child, "phy_id");
+			if (len / sizeof(pcell_t) == 2) {
+				/* Get phy address from fdt */
+				if (OF_getencprop(child, "phy_id", phy_id, len) > 0)
+					phy = phy_id[1];
+			}
+		}
 
 		len = OF_getproplen(child, "dual_emac_res_vlan");
 		if (len / sizeof(pcell_t) == 1) {
