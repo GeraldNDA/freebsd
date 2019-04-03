@@ -390,6 +390,7 @@ fdt_get_phyaddr(phandle_t node, device_t dev, int *phy_addr, void **phy_sc)
 	if (OF_getencprop(node, "phy-handle", (void *)&phy_handle,
 	    sizeof(phy_handle)) <= 0)
 		return (ENXIO);
+
 	phy_node = OF_node_from_xref(phy_handle);
 
 	if (OF_getencprop(phy_node, "reg", (void *)&phy_reg,
