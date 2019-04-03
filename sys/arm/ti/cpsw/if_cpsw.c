@@ -744,9 +744,9 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
-	/* Find any slave with vlan (is it still correct ???) */
-	vlan = -1;
+	/* Find any slave with phy-handle */
 	phy = -1;
+	vlan = -1;
 
 	for (child = OF_child(sc->node); child != 0; child = OF_peer(child)) {
 		if (OF_getprop_alloc(child, "name", (void **)&name) < 0)
@@ -761,7 +761,7 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 
 		len = OF_getproplen(child, "phy-handle");
 		if (len / sizeof(pcell_t) == 1) {
-			if (fdt_get_phyaddr(child, sc->dev, &phy, NULL) != 0)
+			if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0)
 				return (ENXIO);
 		}
 
