@@ -265,8 +265,6 @@ mgb_attach(device_t dev)
 	callout_init_mtx(&sc->watchdog, &sc->mtx, 0);
 
 	/* Allocate bus resources for using PCI bus */
-	sc->dev = dev;
-
 	rid = PCIR_BAR(MGB_BAR);
 	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
 	    &rid, RF_ACTIVE);
@@ -307,12 +305,61 @@ mgb_attach(device_t dev)
 		phyaddr = MII_PHY_ANY;
 		break;
 	}
+	sc->miibus = NULL;
+
 	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
 	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
+	/* Check OUI */
+	u_int reg2, reg3;
+	uint32_t oui, model, rev;
+	reg2 = mgb_miibus_readreg(dev, phyaddr, 2);
+	reg3 = mgb_miibus_readreg(dev, phyaddr, 3);
+	oui = MII_OUI(reg2, reg3);
+	model = MII_MODEL(reg3);
+	rev = MII_REV(reg3);
+	device_printf(dev, "OUI: 0x%06x, model: 0x%04x, rev: %d\n",
+			MII_OUI(reg2, reg3),
+			MII_MODEL(reg3),
+			MII_REV(reg3));
+	device_t *children;
+	int num_children;
+	if(!device_get_children(dev, &children, &num_children)) {
+		if(num_children != 1)
+			device_printf(dev, "Found %d children ...\n", num_children);
+		else {
+			device_printf(children[0], "I am the only child. And I'm %s\n", device_is_attached(children[0]) ? "attached" : "not attached");
+			device_printf(dev, "Only child %s miibus\n", sc->miibus == children[0] ? "is" : "is not");
+			device_t *grandchildren;
+			int num_grandchildren;
+			if(!device_get_children(children[0], &grandchildren, &num_grandchildren)) {
+				if(num_grandchildren != 1)
+					device_printf(dev, "Found %d grandchildren ...\n", num_grandchildren);
+				else {
+					device_printf(grandchildren[0], "I am the only grandchild. And I'm %s\n", device_is_attached(grandchildren[0]) ? "attached" : "not attached");
+					driver_t *gchild_driver = device_get_driver(grandchildren[0]);
+					device_printf(grandchildren[0], "My driver name is: %s\n", gchild_driver ? gchild_driver->name : "null");
+				}
+				free(grandchildren, M_TEMP);
+
+
+			}
+		}
+		free(children, M_TEMP);
+	}
+
 	if(unlikely(error != 0)) {
 		device_printf(dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
+#if 0
+	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
+	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
+
+	if(unlikely(error != 0)) {
+		device_printf(dev, "Failed to attach MII interface\n");
+		goto fail;
+	}
+#endif
 	struct mii_data *miid;
 	miid = device_get_softc(sc->miibus);
 	if(miid->mii_media.ifm_status == NULL) {
@@ -789,7 +836,7 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 #endif
 	retval = CSR_READ_REG(sc, MGB_MII_DATA) & 0xFFFF;
 done:
-	device_printf(dev, "READ '%d' from REG#%d from PHY#%d\n", retval, reg, phy);
+	device_printf(dev, "READ '0x%x' from REG#%d from PHY#%d\n", retval, reg, phy);
 	return retval;
 }
 
@@ -813,12 +860,19 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	if (i == MGB_TIMEOUT)
 		return EIO;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	CSR_WRITE_REG(sc, MGB_MII_DATA, data);
-	CSR_WRITE_REG(sc, MGB_MII_ACCESS,
+	int mii_access = (phy << 11) & 0xF800;
+	mii_access |= (reg << 6) & 0x7C0;
+	mii_access |= 0x1;
+	mii_access |= 0x2;
+#if 0
+	device_printf(dev, "Suggested mii_access (0x%x) vs mine (0x%x)\n", mii_access,
 	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
 	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
 	    MGB_MII_WRITE | MGB_MII_BUSY
-	);
+	    );
+#endif
+	CSR_WRITE_REG(sc, MGB_MII_DATA, data);
+	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
 	/* CHECK_UNTIL_TIMEOUT */
 	for(i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
@@ -828,7 +882,7 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	if (i == MGB_TIMEOUT)
 		return EIO;
 	/* END OF CHECK_UNTIL_TIMEOUT */
-	device_printf(dev, "WROTE %d from REG#%d from PHY#%d\n",data, reg, phy);
+	device_printf(dev, "WROTE '0x%x' from REG#%d from PHY#%d\n",data, reg, phy);
 	return 0;
 }
 

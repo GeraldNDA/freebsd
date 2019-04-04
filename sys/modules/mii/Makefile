@@ -10,6 +10,7 @@ SRCS+=	miibus_if.c miibus_if.h mii.c miidevs.h mii_bitbang.c mii_physubr.c
 SRCS+=	mlphy.c nsgphy.c nsphy.c nsphyter.c pci_if.h pnaphy.c qsphy.c
 SRCS+=	rdcphy.c rgephy.c rlphy.c smcphy.c
 SRCS+=	smscphy.c tdkphy.c tlphy.c truephy.c
+SRCS+= 	mgbphy.c
 SRCS+=	ukphy.c ukphy_subr.c
 SRCS+=	xmphy.c
 

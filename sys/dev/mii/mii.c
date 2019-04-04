@@ -132,8 +132,10 @@ miibus_attach(device_t dev)
 	struct mii_data		*mii;
 	device_t		*children;
 	int			i, nchildren;
+	device_printf(dev, "Running miibus attach!!!\n");
 
 	mii = device_get_softc(dev);
+	device_printf(dev, "Finding children (phy drivers)!!!\n");
 	if (device_get_children(dev, &children, &nchildren) == 0) {
 		for (i = 0; i < nchildren; i++) {
 			ma = device_get_ivars(children[i]);
@@ -145,6 +147,8 @@ miibus_attach(device_t dev)
 		device_printf(dev, "cannot get children\n");
 		return (ENXIO);
 	}
+	device_printf(dev, "Finding children (phy drivers)!!!\n");
+	device_printf(dev, "Setting up ifmedia and other stuff \n");
 	ivars = device_get_ivars(dev);
 	ifmedia_init(&mii->mii_media, IFM_IMASK, ivars->ifmedia_upd,
 	    ivars->ifmedia_sts);
@@ -152,8 +156,16 @@ miibus_attach(device_t dev)
 	if_setcapabilitiesbit(mii->mii_ifp, IFCAP_LINKSTATE, 0);
 	if_setcapenablebit(mii->mii_ifp, IFCAP_LINKSTATE, 0);
 	LIST_INIT(&mii->mii_phys);
+	device_printf(dev, "Done setup.\n");
+	device_printf(dev, "Attaching children ...\n");
+	i = bus_generic_attach(dev);
+	if (i != 0) {
+		device_printf(dev, "Couldn't attach children!");
+		return (i);
+	}
+	device_printf(dev, "Attached children successfully!!\n");
 
-	return (bus_generic_attach(dev));
+	return (0);
 }
 
 static int
@@ -447,6 +459,7 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 				 * Yes, there is already something
 				 * configured at this address.
 				 */
+				device_printf(dev, "Skipped phy#%d because it's already configured\n", ma.mii_phyno);
 				goto skip;
 			}
 		}
@@ -467,14 +480,16 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 		 * There is a PHY at this address.  If we were given an
 		 * `offset' locator, skip this PHY if it doesn't match.
 		 */
-		if (offloc != MII_OFFSET_ANY && offloc != ivars->mii_offset)
+		if (offloc != MII_OFFSET_ANY && offloc != ivars->mii_offset) {
 			goto skip;
+		}
 
 		/*
 		 * Skip this PHY if it's not included in the phymask hint.
 		 */
-		if ((phymask & (1 << ma.mii_phyno)) == 0)
+		if ((phymask & (1 << ma.mii_phyno)) == 0) {
 			goto skip;
+		}
 
 		/*
 		 * Extract the IDs.  Braindead PHYs will be handled by
@@ -487,8 +502,9 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 		ma.mii_offset = ivars->mii_offset;
 		args = malloc(sizeof(struct mii_attach_args), M_DEVBUF,
 		    M_NOWAIT);
-		if (args == NULL)
+		if (args == NULL) {
 			goto skip;
+		}
 		bcopy((char *)&ma, (char *)args, sizeof(ma));
 		phy = device_add_child(*miibus, NULL, -1);
 		if (phy == NULL) {
@@ -514,16 +530,20 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 			rv = ENXIO;
 			goto fail;
 		}
+		device_printf(dev, "Attaching sub-drivers for dev ...");
 		rv = bus_generic_attach(dev);
 		if (rv != 0)
 			goto fail;
+		device_printf(dev, "Success.\n");
 
 		/* Attaching of the PHY drivers is done in miibus_attach(). */
 		return (0);
 	}
+	device_printf(dev, "Attaching sub-drivers for miibus ...");
 	rv = bus_generic_attach(*miibus);
 	if (rv != 0)
 		goto fail;
+	device_printf(dev, "Success.\n");
 
 	return (0);
 
