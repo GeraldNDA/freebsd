@@ -35,12 +35,14 @@ __FBSDID("$FreeBSD$");
 
 /*
  * Microchip LAN7430/LAN7431 Low Power PCIe to Gigabit Ethernet Controller driver.
- */
-
-/*
  *
- * <More info about device>
+ * Product information:
+ * LAN7430 https://www.microchip.com/wwwproducts/en/LAN7430
+ *   - Integrated IEEE 802.3 compliant PHY
+ * LAN7431 https://www.microchip.com/wwwproducts/en/LAN7431
+ *   - RGMII Interface
  *
+ * This driver uses the default 'ukphy' PHY driver.
  */
 
 #include <sys/types.h>
@@ -76,11 +78,9 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/miivar.h>
 #include "miibus_if.h"
 
+/* Registers and structures for MGB driver */
 #include <dev/mgb/mgb.h>
 
-/*
- * List here so that you can easily do device recon
- */
 static struct mgb_vendor_info mgb_vendor_info_array[] = {
 	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7430, "Microchip LAN7430 PCIe Gigabit Ethernet Controller" },
 	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7431, "Microchip LAN7431 PCIe Gigabit Ethernet Controller" },
@@ -88,45 +88,46 @@ static struct mgb_vendor_info mgb_vendor_info_array[] = {
 };
 
 /* PCI methods */
-static int	mgb_probe(device_t);
-static int	mgb_attach(device_t);
-static int	mgb_detach(device_t);
-/* static int	mgb_shutdown(device_t); */
-/* static int	mgb_suspend(device_t); */
-/* static int	mgb_resume(device_t); */
+static device_probe_t		mgb_probe;
+static device_attach_t		mgb_attach;
+static device_detach_t		mgb_detach;
+/* static device_shutdown_t	mgb_shutdown; */
+/* static device_suspend_t	mgb_suspend; */
+/* static device_resume_t	mgb_resume; */
 
 /* MSI Interrupts support */
-static int	mgb_test_bar(struct mgb_softc *);
+static int			mgb_test_bar(struct mgb_softc *);
+/* Interrupt helper functions */
+static void 			mgb_intr_enable(struct mgb_softc *);
+static void 			mgb_intr_disable(struct mgb_softc *);
+static int 			mgb_intr_test(struct mgb_softc *);
 
 /* MAC support */
-static void	mgb_get_ethaddr(struct mgb_softc *, caddr_t);
-
+static void			mgb_get_ethaddr(struct mgb_softc *, caddr_t);
 
 /* MII methods */
-static int	mgb_miibus_readreg(device_t, int, int);
-static int	mgb_miibus_writereg(device_t, int, int, int);
+static int			mgb_miibus_readreg(device_t, int, int);
+static int			mgb_miibus_writereg(device_t, int, int, int);
 
 /* MII MEDIA support */
-static int	mgb_ifmedia_upd(struct ifnet *);
-static void	mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+static int			mgb_ifmedia_upd(struct ifnet *);
+static void			mgb_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 
 /* IFNET methods */
-static void	mgb_init(void *);
-static int	mgb_transmit_init(if_t, struct mbuf *);
-static void	mgb_qflush(if_t);
-static int	mgb_ioctl(if_t, u_long, caddr_t);
-
-/* Interrupt helper functions */
-static void 	mgb_intr_enable(struct mgb_softc *);
-static void 	mgb_intr_disable(struct mgb_softc *);
-static int 	mgb_intr_test(struct mgb_softc *);
+static void			mgb_init(void *);
+static int			mgb_transmit_init(if_t, struct mbuf *);
+static void			mgb_qflush(if_t);
+static int			mgb_ioctl(if_t, u_long, caddr_t);
 
 /* HW reset helper functions */
-static int	mgb_hw_init(device_t);
-static int	mgb_hw_reset(struct mgb_softc *);
-static int	mgb_mac_init(struct mgb_softc *);
-static int	mgb_dmac_reset(struct mgb_softc *);
-static int	mgb_phy_reset(struct mgb_softc *);
+static int			mgb_hw_init(device_t);
+static int			mgb_hw_reset(struct mgb_softc *);
+static int			mgb_mac_init(struct mgb_softc *);
+static int			mgb_dmac_reset(struct mgb_softc *);
+static int			mgb_phy_reset(struct mgb_softc *);
+
+/* Flag used during ISR */
+static int isr_test_flag = 0;
 
 /*
  * Probe for a mgb device. This is done by checking the device list.
@@ -154,6 +155,7 @@ static int
 mgb_test_bar(struct mgb_softc *sc)
 {
 	/* Equivalent to chip_check_id */
+	/* XXX Endian */
 	uint32_t id_rev = CSR_READ_REG(sc, 0x0) >> 16;
 	if (id_rev == PCI_DEVICE_ID_LAN7430 || id_rev == PCI_DEVICE_ID_LAN7431) {
 		device_printf(sc->dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
@@ -164,7 +166,6 @@ mgb_test_bar(struct mgb_softc *sc)
 	}
 }
 
-static int isr_test_flag = 0;
 
 static void
 mgb_intr(void * arg)
@@ -185,15 +186,13 @@ mgb_intr(void * arg)
 		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
 	}
 
-
-
 #if 0
-	read status and enable registers
-	ensure that the inerrupt is for this device
-	check status bit for which intr handler to call
-	INT_BIT_TX0 -> transmit
-	INT_BIT_SW_GP -> test
-	and so foth
+	if(intr_sts &  MGB_INTR_STS_TX) {
+		/* Do TX Stuff */
+	}
+	if(intr_sts &  MGB_INTR_STS_RX) {
+		/* Do RX Stuff */
+	}
 #endif
 }
 
@@ -366,7 +365,6 @@ mgb_attach(device_t dev)
 	if_setinitfn(sc->ifp, mgb_init);
 	if_settransmitfn(sc->ifp, mgb_transmit_init);
 	if_setqflushfn(sc->ifp, mgb_qflush);
-	/* if_setqflushfn */
 	if_setioctlfn(sc->ifp, mgb_ioctl);
 	/* if_setgetcounterfn */
 
@@ -383,7 +381,6 @@ mgb_attach(device_t dev)
 	device_printf(sc->dev, "Interrupt test: %s\n", (mgb_intr_test(sc) == 1 ? "PASS" : "FAIL"));
 
 	ether_ifattach(sc->ifp, ethaddr);
-	device_printf(dev, "DEVICE ATTACHED SUCCESSFULLY\n");
 
 fail:
 	if (error)
@@ -476,10 +473,6 @@ mgb_detach(device_t dev)
 static void
 mgb_get_ethaddr(struct mgb_softc *sc, caddr_t dest)
 {
-	/* This should read the bytes of mac address one at a time
-	 * so endianness shouldn't be an issue ... (each bus_read method)
-	 * is defined at the device level.
-	 */
 	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, dest, 4);
 	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, dest + 4, 2);
 }
@@ -492,21 +485,13 @@ mgb_init(void *arg)
 
 	sc = (struct mgb_softc *)arg;
 	miid = device_get_softc(sc->miibus);
-	device_printf(sc->dev, "Running device init ...\n");
 #if 0
 	Lock SC
 	Interrupts, DMA queues, buffer init, load station addr etc.
 	Unlock SC
-
-	These lines cause the IF interface to start being used ...!
-	if_setdrvflagbits(sc->ifp, IFF_DRV_RUNNING, IFF_DRV_OACTIVE)
 #endif
-	sc->ifp->if_drv_flags |= IFF_DRV_RUNNING;
-	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+	if_setdrvflagbits(sc->ifp, IFF_DRV_RUNNING, IFF_DRV_OACTIVE);
 	mii_mediachg(miid);
-	if(LIST_EMPTY(&miid->mii_phys))
-		device_printf(sc->dev, "NO PHYS!\n");
-	device_printf(sc->dev, "Device should be running now.\n");
 
 }
 
@@ -516,8 +501,7 @@ mgb_transmit_init(if_t ifp, struct mbuf *m)
 	struct mgb_softc *sc;
 
 	sc = if_getsoftc(ifp);
-	/* Run (3+ times) on mgb0 up */
-	device_printf(sc->dev, "Initialized transmit queues and whatnot.\n");
+	device_printf(sc->dev, "transmit_init()\n");
 	return 0;
 }
 
@@ -527,8 +511,7 @@ mgb_qflush(if_t ifp)
 	struct mgb_softc *sc;
 
 	sc = if_getsoftc(ifp);
-	/* Run (1+ times) on mgb0 down and kldunload mgb */
-	device_printf(sc->dev, "Running qflush...\n");
+	device_printf(sc->dev, "qflush()\n");
 }
 
 static int
@@ -541,78 +524,23 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 
 	sc = if_getsoftc(ifp);
 	miid = device_get_softc(sc->miibus);
-	if(miid == NULL)
-		device_printf(sc->dev, "miid is NULL");
-
 	ifr  = (struct ifreq *)data;
 
+	error = 0;
 	switch (command) {
 	case SIOCSIFFLAGS:
-		error = 0;
+		if_printf(ifp, "Does nothing for SET IF FLAGS\n");
 		break;
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
-		error = 0;
+		if_printf(ifp, "Does nothing for ADD/DEL MULTI\n");
 		break;
 	case SIOCSIFMEDIA:
-		device_printf(sc->dev, "Attempted to set ifmedia\n");
+	case SIOCGIFMEDIA:
 		error = ifmedia_ioctl(ifp, ifr,  &miid->mii_media, command);
 		break;
-	case SIOCGIFMEDIA:
-		device_printf(sc->dev, "Attempting to get ifmedia\n");
-		struct ifmedia *ifm = &miid->mii_media;
-		struct ifmediareq *ifmr = (struct ifmediareq *) ifr;
-		struct ifmedia_entry *ep;
-		int i;
-
-		if (ifmr->ifm_count < 0)
-			return (EINVAL);
-		if (ifm->ifm_cur) {
-			device_printf(sc->dev, "Converting to compat media\n");
-			device_printf(sc->dev, "IFM: %s -> IFM_CUR: %s -> IFM_MEDIA: %s",
-					ifm ? "good": "null",
-					ifm && ifm->ifm_cur ? "good": "null",
-					ifm && ifm->ifm_cur && ifm->ifm_cur->ifm_media ? "good": "null"
-					);
-			i = ifm->ifm_cur->ifm_media;
-			device_printf(sc->dev, "GOT MEDIA TYPE\n");
-			if (IFM_TYPE(i) == IFM_ETHER && IFM_SUBTYPE(i) > IFM_OTHER) {
-				i &= ~(IFM_ETH_XTYPE|IFM_TMASK);
-				i |= IFM_OTHER;
-			}
-			device_printf(sc->dev, "SUCCESS\n");
-		}
-		device_printf(sc->dev, "Setting values for ifmr\n");
-		ifmr->ifm_active = ifmr->ifm_current = ifm->ifm_cur ? i: IFM_NONE;
-		ifmr->ifm_mask = ifm->ifm_mask;
-		ifmr->ifm_status = 0;
-		device_printf(sc->dev, "SUCCESS\n");
-		device_printf(sc->dev, "Calling ifm->ifm_status\n");
-		(*ifm->ifm_status)(ifp, ifmr);
-		device_printf(sc->dev, "SUCCESS\n");
-
-		/*
-		 * If there are more interfaces on the list, count
-		 * them.  This allows the caller to set ifmr->ifm_count
-		 * to 0 on the first call to know how much space to
-		 * allocate.
-		 */
-		device_printf(sc->dev, "Doing other stuff with ifm_list\n");
-		i = 0;
-		LIST_FOREACH(ep, &ifm->ifm_list, ifm_list)
-			if (i++ < ifmr->ifm_count) {
-				error = copyout(&ep->ifm_media,
-				    ifmr->ifm_ulist + i - 1, sizeof(int));
-				if (error)
-					break;
-			}
-		if (error == 0 && i > ifmr->ifm_count)
-			error = ifmr->ifm_count ? E2BIG : 0;
-		ifmr->ifm_count = i;
-		device_printf(sc->dev, "SUCCESS\n");
-		break;
 	case SIOCSIFCAP:
-		error = 0;
+		if_printf(ifp, "Does nothing for SET IF CAPABILITIES\n");
 		break;
 	case SIOCSIFMTU:
 		/* Default may be sufficient */
@@ -622,6 +550,29 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 	}
 
 	return (error);
+}
+
+/*
+ * Poll device register for bits to be written or cleared.
+ *
+ *
+ *
+ */
+static int
+mgb_wait_for_bits(struct mgb_softc *sc, int reg, int set_bits, int clear_bits)
+{
+	int i, val;
+	i = 0;
+
+	do {
+		DELAY(10); /* > 5us delay */
+		val = CSR_READ_REG(sc, reg);
+		if ((val & set_bits) == set_bits &&
+		    (val & clear_bits) == 0)
+			return MGB_STS_OK;
+	} while(i++ < MGB_TIMEOUT);
+
+	return MGB_STS_TIMEOUT;
 }
 
 static int
@@ -653,18 +604,8 @@ fail:
 static int
 mgb_hw_reset(struct mgb_softc *sc)
 {
-	int i;
 	CSR_UPDATE_REG(sc, MGB_HW_CFG, MGB_LITE_RESET);
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10); /* > 5us delay */
-		if(!(CSR_READ_REG(sc, MGB_HW_CFG) & MGB_LITE_RESET))
-			break;
-	}
-	if (i == MGB_TIMEOUT)
-		return 1;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	return MGB_STS_OK;
+	return (mgb_wait_for_bits(sc, MGB_HW_CFG, 0x0, MGB_LITE_RESET));
 }
 
 static int
@@ -686,100 +627,42 @@ mgb_mac_init(struct mgb_softc *sc)
 static int
 mgb_phy_reset(struct mgb_softc *sc)
 {
-	int i;
 	CSR_UPDATE_BYTE(
 		sc,
 		MGB_PMT_CTL,
 		MGB_PHY_RESET
 	);
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10); /* 2ms max */
-		if(!(CSR_READ_BYTE(sc, MGB_PMT_CTL) & MGB_PHY_RESET))
-			break;
-	}
-	if (i == MGB_TIMEOUT)
-		return 21;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		if(CSR_READ_BYTE(sc, MGB_PMT_CTL) & MGB_PHY_READY)
-			break;
-	}
-	if (i == MGB_TIMEOUT)
-		return 2;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	return MGB_STS_OK;
+	if(mgb_wait_for_bits(sc, MGB_PMT_CTL, 0x0, MGB_PHY_RESET) == MGB_STS_TIMEOUT)
+		return MGB_STS_TIMEOUT;
+	return (mgb_wait_for_bits(sc, MGB_PMT_CTL, MGB_PHY_READY, 0x0));
 }
 
 static int
 mgb_dmac_reset(struct mgb_softc *sc)
 {
-	int i;
 	CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RESET);
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(!(CSR_READ_REG(sc, MGB_DMAC_CMD) & MGB_DMAC_RESET))
-			break;
-	}
-	if (i == MGB_TIMEOUT)
-		return 3;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	return MGB_STS_OK;
+	return (mgb_wait_for_bits(sc, MGB_DMAC_CMD, 0x0, MGB_DMAC_RESET));
 }
 
 static int
 mgb_miibus_readreg(device_t dev, int phy, int reg)
 {
 	struct mgb_softc *sc;
-	int i;
-	int retval = -505;
+	int mii_access;
 
 	sc = device_get_softc(dev);
 
 	/* for 7430 must be 1, for 7431 must be external phy */
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
-			break;
-	}
-	if (i == MGB_TIMEOUT) {
-		retval = -4;
-		goto done;
-	}
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	int mii_access = (phy << 11) & 0xF800;
-	mii_access |= (reg << 6) & 0x7C0;
-	mii_access |= 0x1;
-	mii_access |= 0x0;
-#if 0
-	device_printf(dev, "Suggested mii_access (0x%x) vs mine (0x%x)\n", mii_access,
-	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
-	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
-	    MGB_MII_READ | MGB_MII_BUSY
-	    );
-#endif
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+		return EIO;
+	/* XXX Endian  */
+	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
+	mii_access |= (reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT;
+	mii_access |= MGB_MII_BUSY | MGB_MII_READ;
 	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
-			break;
-	}
-	if (i == MGB_TIMEOUT) {
-		retval = -5;
-		goto done;
-	}
-	/* END OF CHECK_UNTIL_TIMEOUT */
-#if 0
-	retval = (int)(CSR_READ_2_BYTES(sc, MGB_MII_DATA));
-#endif
-	retval = CSR_READ_REG(sc, MGB_MII_DATA) & 0xFFFF;
-done:
-	device_printf(dev, "READ '0x%x' from REG#%d from PHY#%d\n", retval, reg, phy);
-	return retval;
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+		return EIO;
+	return (CSR_READ_2_BYTES(sc, MGB_MII_DATA));
 }
 
 static int
@@ -787,44 +670,20 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 {
 
 	struct mgb_softc *sc;
-	int i, error;
+	int mii_access;
 
 	sc = device_get_softc(dev);
-	error = 0;
 
-	/* for 7430 must be 1, for 7431 must be external phy */
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
-			break;
-	}
-	if (i == MGB_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	int mii_access = (phy << 11) & 0xF800;
-	mii_access |= (reg << 6) & 0x7C0;
-	mii_access |= 0x1;
-	mii_access |= 0x2;
-#if 0
-	device_printf(dev, "Suggested mii_access (0x%x) vs mine (0x%x)\n", mii_access,
-	    ((phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT) |
-	    ((reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT) |
-	    MGB_MII_WRITE | MGB_MII_BUSY
-	    );
-#endif
+	/* XXX Endian  */
+	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
+	mii_access |= (reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT;
+	mii_access |= MGB_MII_BUSY | MGB_MII_WRITE;
 	CSR_WRITE_REG(sc, MGB_MII_DATA, data);
 	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
-	/* CHECK_UNTIL_TIMEOUT */
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(!(CSR_READ_REG(sc, MGB_MII_ACCESS) & MGB_MII_BUSY))
-			break;
-	}
-	if (i == MGB_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
-	/* END OF CHECK_UNTIL_TIMEOUT */
-	device_printf(dev, "WROTE '0x%x' from REG#%d from PHY#%d\n",data, reg, phy);
 	return 0;
 }
 
