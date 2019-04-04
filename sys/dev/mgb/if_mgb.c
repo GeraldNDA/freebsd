@@ -79,7 +79,7 @@ __FBSDID("$FreeBSD$");
 #include "miibus_if.h"
 
 /* Registers and structures for MGB driver */
-#include <dev/mgb/mgb.h>
+#include <dev/mgb/if_mgb.h>
 
 static struct mgb_vendor_info mgb_vendor_info_array[] = {
 	{ PCI_VENDOR_ID_MICROCHIP, PCI_DEVICE_ID_LAN7430, "Microchip LAN7430 PCIe Gigabit Ethernet Controller" },
@@ -576,14 +576,16 @@ mgb_wait_for_bits(struct mgb_softc *sc, int reg, int set_bits, int clear_bits)
 static int
 mgb_dma_init(device_t dev)
 {
+#if 0
 	struct mgb_softc *sc;
 	bus_addr_t lowaddr;
 	bus_size_t rx_lst_size, tx_list_size;
 	int i, error;
 
 	sc = device_get_softc(dev);
-	/** Create bus DMA tags **/
+#endif
 
+	return 0;
 }
 
 static int
