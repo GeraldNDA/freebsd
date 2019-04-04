@@ -91,9 +91,11 @@ static struct mgb_vendor_info mgb_vendor_info_array[] = {
 static device_probe_t		mgb_probe;
 static device_attach_t		mgb_attach;
 static device_detach_t		mgb_detach;
-/* static device_shutdown_t	mgb_shutdown; */
-/* static device_suspend_t	mgb_suspend; */
-/* static device_resume_t	mgb_resume; */
+#if 0
+static device_shutdown_t	mgb_shutdown;
+static device_suspend_t		mgb_suspend;
+static device_resume_t		mgb_resume;
+#endif
 
 /* MSI Interrupts support */
 static int			mgb_test_bar(struct mgb_softc *);
@@ -120,7 +122,9 @@ static void			mgb_qflush(if_t);
 static int			mgb_ioctl(if_t, u_long, caddr_t);
 
 /* HW reset helper functions */
+static int			mgb_wait_for_bits(struct mgb_softc *, int, int, int);
 static int			mgb_hw_init(device_t);
+static int			mgb_dma_init(device_t);
 static int			mgb_hw_reset(struct mgb_softc *);
 static int			mgb_mac_init(struct mgb_softc *);
 static int			mgb_dmac_reset(struct mgb_softc *);
@@ -156,7 +160,7 @@ mgb_test_bar(struct mgb_softc *sc)
 {
 	/* Equivalent to chip_check_id */
 	/* XXX Endian */
-	uint32_t id_rev = CSR_READ_REG(sc, 0x0) >> 16;
+	uint32_t id_rev = CSR_READ_REG(sc, 0) >> 16;
 	if (id_rev == PCI_DEVICE_ID_LAN7430 || id_rev == PCI_DEVICE_ID_LAN7431) {
 		device_printf(sc->dev, "ID CHECK PASSED with ID (0x%x)\n", id_rev);
 		return 0;
@@ -165,7 +169,6 @@ mgb_test_bar(struct mgb_softc *sc)
 		return ENXIO;
 	}
 }
-
 
 static void
 mgb_intr(void * arg)
@@ -195,7 +198,6 @@ mgb_intr(void * arg)
 	}
 #endif
 }
-
 
 static int
 mgb_intr_test(struct mgb_softc *sc)
@@ -239,13 +241,10 @@ mgb_intr_enable(struct mgb_softc *sc)
 static void
 mgb_intr_disable(struct mgb_softc *sc)
 {
-	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0x0);
-	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0x0);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0);
+	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0);
 }
-/*
- * Attach to a mgb device.
- * => Initialize many a variable
- */
+
 static int
 mgb_attach(device_t dev)
 {
@@ -388,7 +387,6 @@ fail:
 
 	return (error);
 }
-
 
 static int
 mgb_ifmedia_upd(struct ifnet *ifp)
@@ -576,6 +574,19 @@ mgb_wait_for_bits(struct mgb_softc *sc, int reg, int set_bits, int clear_bits)
 }
 
 static int
+mgb_dma_init(device_t dev)
+{
+	struct mgb_softc *sc;
+	bus_addr_t lowaddr;
+	bus_size_t rx_lst_size, tx_list_size;
+	int i, error;
+
+	sc = device_get_softc(dev);
+	/** Create bus DMA tags **/
+
+}
+
+static int
 mgb_hw_init(device_t dev)
 {
 	struct mgb_softc *sc;
@@ -605,7 +616,7 @@ static int
 mgb_hw_reset(struct mgb_softc *sc)
 {
 	CSR_UPDATE_REG(sc, MGB_HW_CFG, MGB_LITE_RESET);
-	return (mgb_wait_for_bits(sc, MGB_HW_CFG, 0x0, MGB_LITE_RESET));
+	return (mgb_wait_for_bits(sc, MGB_HW_CFG, 0, MGB_LITE_RESET));
 }
 
 static int
@@ -623,7 +634,6 @@ mgb_mac_init(struct mgb_softc *sc)
 	return MGB_STS_OK;
 }
 
-
 static int
 mgb_phy_reset(struct mgb_softc *sc)
 {
@@ -632,16 +642,16 @@ mgb_phy_reset(struct mgb_softc *sc)
 		MGB_PMT_CTL,
 		MGB_PHY_RESET
 	);
-	if(mgb_wait_for_bits(sc, MGB_PMT_CTL, 0x0, MGB_PHY_RESET) == MGB_STS_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_PMT_CTL, 0, MGB_PHY_RESET) == MGB_STS_TIMEOUT)
 		return MGB_STS_TIMEOUT;
-	return (mgb_wait_for_bits(sc, MGB_PMT_CTL, MGB_PHY_READY, 0x0));
+	return (mgb_wait_for_bits(sc, MGB_PMT_CTL, MGB_PHY_READY, 0));
 }
 
 static int
 mgb_dmac_reset(struct mgb_softc *sc)
 {
 	CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RESET);
-	return (mgb_wait_for_bits(sc, MGB_DMAC_CMD, 0x0, MGB_DMAC_RESET));
+	return (mgb_wait_for_bits(sc, MGB_DMAC_CMD, 0, MGB_DMAC_RESET));
 }
 
 static int
@@ -653,14 +663,14 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 	sc = device_get_softc(dev);
 
 	/* for 7430 must be 1, for 7431 must be external phy */
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
 	/* XXX Endian  */
 	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
 	mii_access |= (reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT;
 	mii_access |= MGB_MII_BUSY | MGB_MII_READ;
 	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
 	return (CSR_READ_2_BYTES(sc, MGB_MII_DATA));
 }
@@ -674,7 +684,7 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 
 	sc = device_get_softc(dev);
 
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
 	/* XXX Endian  */
 	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
@@ -682,12 +692,10 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	mii_access |= MGB_MII_BUSY | MGB_MII_WRITE;
 	CSR_WRITE_REG(sc, MGB_MII_DATA, data);
 	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0x0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
 	return 0;
 }
-
-
 
 /*********************************************************************
  *  FreeBSD Device Interface Entry Points
