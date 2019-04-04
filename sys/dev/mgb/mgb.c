@@ -309,68 +309,10 @@ mgb_attach(device_t dev)
 
 	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
 	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
-	/* Check OUI */
-	u_int reg2, reg3;
-	uint32_t oui, model, rev;
-	reg2 = mgb_miibus_readreg(dev, phyaddr, 2);
-	reg3 = mgb_miibus_readreg(dev, phyaddr, 3);
-	oui = MII_OUI(reg2, reg3);
-	model = MII_MODEL(reg3);
-	rev = MII_REV(reg3);
-	device_printf(dev, "OUI: 0x%06x, model: 0x%04x, rev: %d\n",
-			MII_OUI(reg2, reg3),
-			MII_MODEL(reg3),
-			MII_REV(reg3));
-	device_t *children;
-	int num_children;
-	if(!device_get_children(dev, &children, &num_children)) {
-		if(num_children != 1)
-			device_printf(dev, "Found %d children ...\n", num_children);
-		else {
-			device_printf(children[0], "I am the only child. And I'm %s\n", device_is_attached(children[0]) ? "attached" : "not attached");
-			device_printf(dev, "Only child %s miibus\n", sc->miibus == children[0] ? "is" : "is not");
-			device_t *grandchildren;
-			int num_grandchildren;
-			if(!device_get_children(children[0], &grandchildren, &num_grandchildren)) {
-				if(num_grandchildren != 1)
-					device_printf(dev, "Found %d grandchildren ...\n", num_grandchildren);
-				else {
-					device_printf(grandchildren[0], "I am the only grandchild. And I'm %s\n", device_is_attached(grandchildren[0]) ? "attached" : "not attached");
-					driver_t *gchild_driver = device_get_driver(grandchildren[0]);
-					device_printf(grandchildren[0], "My driver name is: %s\n", gchild_driver ? gchild_driver->name : "null");
-				}
-				free(grandchildren, M_TEMP);
-
-
-			}
-		}
-		free(children, M_TEMP);
-	}
-
 	if(unlikely(error != 0)) {
 		device_printf(dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
-#if 0
-	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
-	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
-
-	if(unlikely(error != 0)) {
-		device_printf(dev, "Failed to attach MII interface\n");
-		goto fail;
-	}
-#endif
-	struct mii_data *miid;
-	miid = device_get_softc(sc->miibus);
-	if(miid->mii_media.ifm_status == NULL) {
-		error = EINVAL;
-		device_printf(dev, "ifm_status was not set!, miibus is attached? %s \n", device_is_attached(sc->miibus) ? "YES": "NO");
-		goto fail;
-	}
-#if 0
-	error = mii_attach(dev, &sc->miibus, sc->ifp, NULL,
-	    NULL, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, MIIF_DOPAUSE);
-#endif
 
 
 	rid = 0; /* use INTx interrupts by default */
@@ -916,8 +858,13 @@ static driver_t mgb_driver = {
 };
 
 devclass_t mgb_devclass;
-DRIVER_MODULE(mgb, pci, mgb_driver, mgb_devclass, 0, 0);
-DRIVER_MODULE(miibus, mgb, miibus_driver, miibus_devclass, 0, 0);
+DRIVER_MODULE(mgb, pci, mgb_driver, mgb_devclass, NULL, NULL);
+#if 0
+/* If MIIBUS debug stuff is in attach then order matters. Use below instead. */
+DRIVER_MODULE_ORDERED(mgb, pci, mgb_driver, mgb_devclass, NULL, NULL,
+    SI_ORDER_ANY);
+#endif
+DRIVER_MODULE(miibus, mgb, miibus_driver, miibus_devclass, NULL, NULL);
 
 MODULE_PNP_INFO("U16:vendor;U16:device", pci, mgb, mgb_vendor_info_array,
     nitems(mgb_vendor_info_array) - 1);
