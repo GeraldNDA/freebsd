@@ -917,6 +917,7 @@ static driver_t mgb_driver = {
 
 devclass_t mgb_devclass;
 DRIVER_MODULE(mgb, pci, mgb_driver, mgb_devclass, 0, 0);
+DRIVER_MODULE(miibus, mgb, miibus_driver, miibus_devclass, 0, 0);
 
 MODULE_PNP_INFO("U16:vendor;U16:device", pci, mgb, mgb_vendor_info_array,
     nitems(mgb_vendor_info_array) - 1);
