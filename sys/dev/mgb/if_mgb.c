@@ -250,7 +250,7 @@ mgb_attach(device_t dev)
 {
 	struct mgb_softc *sc;
 	uint8_t ethaddr[ETHER_ADDR_LEN];
-	int error = 0, rid, cap;
+	int error = 0, rid;
 	int msic, msixc;
 
 
@@ -576,15 +576,14 @@ static int
 mgb_dma_init(device_t dev)
 {
 	struct mgb_softc *sc;
-	bus_addr_t lowaddr;
-	bus_size_t rx_lst_size, tx_list_size;
-	int i, error;
+	/* bus_size_t rx_lst_size, tx_list_size; */
+	int error;
 
 	sc = device_get_softc(dev);
 
 	error = bus_dma_tag_create(bus_get_dma_tag(dev),/* parent */
 	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* lowaddr (will always be PCIE so can use 64-bit) */
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filter, filterarg */
 	    BUS_SPACE_MAXSIZE,	/* maxsize */
@@ -601,7 +600,7 @@ mgb_dma_init(device_t dev)
 	/* TX mbufs */
 	error = bus_dma_tag_create(sc->dma_tags.parent,/* parent */
 	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* lowaddr (will always be PCIE so can use 64-bit) */
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filter, filterarg */
 	    MGB_DMA_DESC_RING_SIZE,	/* maxsize */
@@ -618,7 +617,7 @@ mgb_dma_init(device_t dev)
 	/* RX mbufs */
 	error = bus_dma_tag_create(sc->dma_tags.parent,/* parent */
 	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* lowaddr (will always be PCIE so can use 64-bit) */
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filter, filterarg */
 	    MGB_DMA_DESC_RING_SIZE,	/* maxsize */

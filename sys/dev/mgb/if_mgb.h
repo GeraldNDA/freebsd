@@ -72,7 +72,7 @@
 #define MGB_DMA_RING_SIZE		16
 #define MGB_DMA_REG(reg, _channel)	(reg | (_channel << 6))
 #define MGB_DMA_DESC_RING_SIZE		\
-	(sizeof(mgb_descriptor_ring) * MGB_DMA_RING_SIZE)
+	(sizeof(struct mgb_descriptor_ring) * MGB_DMA_RING_SIZE)
 
 #define MGB_DMA_TX_CONFIG0(_channel)	MGB_DMA_REG(0x0D40, _channel)
 #define MGB_DMA_TX_CONFIG1(_channel)	MGB_DMA_REG(0x0D44, _channel)
@@ -152,6 +152,12 @@ struct mgb_irq {
 	void				*handler;
 };
 
+struct mgb_dma_tags {
+	bus_dma_tag_t			parent;
+	bus_dma_tag_t			tx_ring;
+	bus_dma_tag_t			rx_ring;
+};
+
 struct mgb_softc {
 	if_t				 ifp;
 	device_t			 dev;
@@ -168,19 +174,19 @@ struct mgb_softc {
 	struct mtx			 mtx;
 	struct callout			 watchdog;
 	int				 timer;
+	struct mgb_dma_tags		 dma_tags;
 };
 
-/* DMA Descriptor Rings */
-struct mgb_descriptor_rint_addr {
-	uint32_t low;
-	uint32_t high;
+struct mgb_descriptor_ring_addr {
+	uint32_t 	low;
+	uint32_t	high;
 };
+
 struct mgb_descriptor_ring {
-	uint32_t sts;
-	struct mgb_descriptor_ring_addr	addr;
-	uint32_t ctl;
+	uint32_t				ctl;
+	struct mgb_descriptor_ring_addr		addr;
+	uint32_t				sts;
 };
-
 
 /* MTX macros */
 #define MGB_LOCK(_sc)			mtx_lock(_sc.mtx)
