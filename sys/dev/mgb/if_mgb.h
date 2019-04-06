@@ -68,6 +68,30 @@
 #define MGB_DMAC_CMD			0xC0C
 #define MGB_DMAC_RESET			0x80000000
 
+/** DMA Rings **/
+#define MGB_DMA_RING_SIZE		16
+#define MGB_DMA_REG(reg, _channel)	(reg | (_channel << 6))
+#define MGB_DMA_DESC_RING_SIZE		\
+	(sizeof(mgb_descriptor_ring) * MGB_DMA_RING_SIZE)
+
+#define MGB_DMA_TX_CONFIG0(_channel)	MGB_DMA_REG(0x0D40, _channel)
+#define MGB_DMA_TX_CONFIG1(_channel)	MGB_DMA_REG(0x0D44, _channel)
+#define MGB_DMA_TX_BASE_H(_channel)	MGB_DMA_REG(0x0D48, _channel)
+#define MGB_DMA_TX_BASE_L(_channel)	MGB_DMA_REG(0x0D4C, _channel)
+#define MGB_DMA_TX_HEAD_WB_H(_channel)	MGB_DMA_REG(0x0D50, _channel) /* head Writeback */
+#define MGB_DMA_TX_HEAD_WB_L(_channel)	MGB_DMA_REG(0x0D54, _channel)
+#define MGB_DMA_TX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
+#define MGB_DMA_TX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
+
+#define MGB_DMA_RX_CONFIG0(_channel)	MGB_DMA_REG(0x0D40, _channel)
+#define MGB_DMA_RX_CONFIG1(_channel)	MGB_DMA_REG(0x0D44, _channel)
+#define MGB_DMA_RX_BASE_H(_channel)	MGB_DMA_REG(0x0D48, _channel)
+#define MGB_DMA_RX_BASE_L(_channel)	MGB_DMA_REG(0x0D4C, _channel)
+#define MGB_DMA_RX_HEAD_WB_H(_channel)	MGB_DMA_REG(0x0D50, _channel) /* head Writeback */
+#define MGB_DMA_RX_HEAD_WB_L(_channel)	MGB_DMA_REG(0x0D54, _channel)
+#define MGB_DMA_RX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
+#define MGB_DMA_RX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
+
 /** PHY **/
 #define MGB_MII_ACCESS			0x120
 #define MGB_MII_DATA			0x124
@@ -92,19 +116,6 @@
 
 #define MGB_STS_OK			( 0 )
 #define MGB_STS_TIMEOUT 		(-1 )
-
-	/* CHECK_UNTIL_TIMEOUT(status, CHECK) */
-	/***
-	status = 0;
-	for(i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
-		if(CHECK())
-			break;
-	}
-	if (i == MGB_TIMEOUT)
-		status = -1;
-	***/
-	/* END OF CHECK_UNTIL_TIMEOUT */
 
 #define CSR_READ_BYTE(sc, reg)		\
 	bus_read_1(sc->regs, reg)
@@ -159,9 +170,21 @@ struct mgb_softc {
 	int				 timer;
 };
 
+/* DMA Descriptor Rings */
+struct mgb_descriptor_rint_addr {
+	uint32_t low;
+	uint32_t high;
+};
+struct mgb_descriptor_ring {
+	uint32_t sts;
+	struct mgb_descriptor_ring_addr	addr;
+	uint32_t ctl;
+};
+
+
 /* MTX macros */
-#define MGB_LOCK(_sc)		mtx_lock(_sc.mtx)
-#define MGB_UNLOCK(_sc)		mtx_unlock(_sc.mtx)
+#define MGB_LOCK(_sc)			mtx_lock(_sc.mtx)
+#define MGB_UNLOCK(_sc)			mtx_unlock(_sc.mtx)
 #define MGB_LOCK_ASSERT(_sc)		mtx_assert(_sc.mtx, MA_OWNED)
 
 

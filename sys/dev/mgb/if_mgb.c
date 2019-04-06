@@ -250,11 +250,10 @@ mgb_attach(device_t dev)
 {
 	struct mgb_softc *sc;
 	uint8_t ethaddr[ETHER_ADDR_LEN];
-	int rid, error;
+	int error = 0, rid, cap;
 	int msic, msixc;
 
 
-	error = 0;
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 
@@ -289,6 +288,7 @@ mgb_attach(device_t dev)
 		error = ENXIO;
 		goto fail;
 	}
+
 	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
 
 	/* Attach MII Interface */
@@ -303,7 +303,6 @@ mgb_attach(device_t dev)
 		phyaddr = MII_PHY_ANY;
 		break;
 	}
-	sc->miibus = NULL;
 
 	error = mii_attach(dev, &sc->miibus, sc->ifp, mgb_ifmedia_upd,
 	    mgb_ifmedia_sts, BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
@@ -346,16 +345,17 @@ mgb_attach(device_t dev)
 			}
 		}
 	}
+
 	sc->irq.res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_SHAREABLE | RF_ACTIVE);
 	if (unlikely(sc->irq.res == NULL)) {
 		device_printf(dev, "Unable to allocate bus resource: interrupts\n");
 		error = ENXIO;
 		goto fail;
 	}
+
 	/*
 	 * Should be sysctl tunable
 	 */
-
 	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
 	if_setdev(sc->ifp, dev);
 	if_setsoftc(sc->ifp, sc);
@@ -515,7 +515,7 @@ mgb_qflush(if_t ifp)
 static int
 mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 {
-	int error;
+	int error = 0;
 	struct ifreq *ifr;
 	struct mgb_softc *sc;
 	struct mii_data *miid;
@@ -524,7 +524,6 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 	miid = device_get_softc(sc->miibus);
 	ifr  = (struct ifreq *)data;
 
-	error = 0;
 	switch (command) {
 	case SIOCSIFFLAGS:
 		if_printf(ifp, "Does nothing for SET IF FLAGS\n");
@@ -576,15 +575,65 @@ mgb_wait_for_bits(struct mgb_softc *sc, int reg, int set_bits, int clear_bits)
 static int
 mgb_dma_init(device_t dev)
 {
-#if 0
 	struct mgb_softc *sc;
 	bus_addr_t lowaddr;
 	bus_size_t rx_lst_size, tx_list_size;
 	int i, error;
 
 	sc = device_get_softc(dev);
-#endif
 
+	error = bus_dma_tag_create(bus_get_dma_tag(dev),/* parent */
+	    1, 0,			/* algnmnt, boundary */
+	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* highaddr */
+	    NULL, NULL,			/* filter, filterarg */
+	    BUS_SPACE_MAXSIZE,	/* maxsize */
+	    0,				/* nsegments */
+	    BUS_SPACE_MAXSIZE,	/* maxsegsize */
+	    0,				/* flags */
+	    NULL, NULL,			/* lockfunc, lockarg */
+	    &sc->dma_tags.parent); /* TODO: Add to mgb.h */
+	if (error != 0) {
+		device_printf(dev, "Couldn't create parent DMA tag.\n");
+		return error;
+	}
+
+	/* TX mbufs */
+	error = bus_dma_tag_create(sc->dma_tags.parent,/* parent */
+	    1, 0,			/* algnmnt, boundary */
+	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* highaddr */
+	    NULL, NULL,			/* filter, filterarg */
+	    MGB_DMA_DESC_RING_SIZE,	/* maxsize */
+	    0,				/* nsegments */
+	    MGB_DMA_DESC_RING_SIZE,	/* maxsegsize */
+	    0,				/* flags */
+	    NULL, NULL,			/* lockfunc, lockarg */
+	    &sc->dma_tags.tx_ring); /* TODO: Add to mgb.h */
+	if (error != 0) {
+		device_printf(dev, "Couldn't create TX ring DMA tag.\n");
+		return error;
+	}
+
+	/* RX mbufs */
+	error = bus_dma_tag_create(sc->dma_tags.parent,/* parent */
+	    1, 0,			/* algnmnt, boundary */
+	    BUS_SPACE_MAXADRR,		/* lowaddr (will always be PCIE so can use 64-bit) */
+	    BUS_SPACE_MAXADDR,		/* highaddr */
+	    NULL, NULL,			/* filter, filterarg */
+	    MGB_DMA_DESC_RING_SIZE,	/* maxsize */
+	    0,				/* nsegments */
+	    MGB_DMA_DESC_RING_SIZE,	/* maxsegsize */
+	    0,				/* flags */
+	    NULL, NULL,			/* lockfunc, lockarg */
+	    &sc->dma_tags.rx_ring); /* TODO: Add to mgb.h */
+	if (error != 0) {
+		device_printf(dev, "Couldn't create RX ring DMA tag.\n");
+		return error;
+	}
+	
+	/*** TODO: Alloc/Load Tags for rings ***/
+	/*** TODO: Create/Allocate/Load DMA Tags for buffers ***/
 	return 0;
 }
 
