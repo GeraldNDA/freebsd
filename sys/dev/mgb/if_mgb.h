@@ -70,6 +70,7 @@
 
 /** DMA Rings **/
 #define MGB_DMA_RING_SIZE		16
+#define MGB_DMA_MAXSEGS			16
 #define MGB_DMA_REG(reg, _channel)	(reg | (_channel << 6))
 #define MGB_DMA_DESC_RING_SIZE		\
 	(sizeof(struct mgb_descriptor_ring) * MGB_DMA_RING_SIZE)
@@ -152,31 +153,6 @@ struct mgb_irq {
 	void				*handler;
 };
 
-struct mgb_dma_tags {
-	bus_dma_tag_t			parent;
-	bus_dma_tag_t			tx_ring;
-	bus_dma_tag_t			rx_ring;
-};
-
-struct mgb_softc {
-	if_t				 ifp;
-	device_t			 dev;
-
-	struct resource			*regs;
-	struct mgb_irq			 irq;
-
-	device_t			 miibus;
-
-	int				 if_flags;
-	int				 ethaddr;
-	int				 flags;
-
-	struct mtx			 mtx;
-	struct callout			 watchdog;
-	int				 timer;
-	struct mgb_dma_tags		 dma_tags;
-};
-
 struct mgb_descriptor_ring_addr {
 	uint32_t 	low;
 	uint32_t	high;
@@ -187,6 +163,59 @@ struct mgb_descriptor_ring {
 	struct mgb_descriptor_ring_addr		addr;
 	uint32_t				sts;
 };
+
+struct mgb_buffer_desc {
+	struct mbuf			*m;
+	bus_dmamap_t			 dmamap;
+	struct mgb_descriptor_ring	*desc;
+	struct mgb_buffer_data		*prev;
+};
+
+struct mgb_ring_data {
+	bus_dma_tag_t			 tag;
+	struct mgb_descriptor_ring	*desc;
+	bus_dmamap_t			 dmamap;
+	bus_addr_t			 busaddr;
+
+	uint32_t			 head_write_back;
+	uint32_t			 last_head;
+	uint32_t			 last_tail;
+};
+
+struct mgb_buffer_data {
+	bus_dma_tag_t			 tag;
+	struct mgb_buffer_desc		 desc[MGB_DMA_RING_SIZE];
+};
+
+struct mgb_softc {
+	if_t				 ifp;
+	device_t			 dev;
+
+	struct resource			*regs;
+	struct mgb_irq			 irq;
+
+	int 				 isr_test_flag;
+
+	device_t			 miibus;
+
+	int				 if_flags;
+	int				 ethaddr;
+	int				 flags;
+
+	struct mtx			 mtx;
+	struct callout			 watchdog;
+	int				 timer;
+
+
+	bus_dma_tag_t			 ring_parent_tag;
+	struct mgb_ring_data		 rx_ring_data;
+	struct mgb_ring_data		 tx_ring_data;
+	bus_dma_tag_t			 buffer_parent_tag;
+	struct mgb_buffer_data		 rx_buffer_data;
+	struct mgb_buffer_data		 tx_buffer_data;
+
+};
+
 
 /* MTX macros */
 #define MGB_LOCK(_sc)			mtx_lock(_sc.mtx)
