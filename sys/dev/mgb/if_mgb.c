@@ -133,6 +133,12 @@ static int			mgb_mac_init(struct mgb_softc *);
 static int			mgb_dmac_reset(struct mgb_softc *);
 static int			mgb_phy_reset(struct mgb_softc *);
 
+static void 			mgb_dma_tx_ring_init(struct mgb_softc *sc);
+static void 			mgb_dma_rx_ring_init(struct mgb_softc *sc);
+static void			mgb_dmac_tx_control(struct mgb_softc *sc, int channel, enum mgb_dmac_cmd cmd);
+static void			mgb_dmac_rx_control(struct mgb_softc *sc, int channel, enum mgb_dmac_cmd cmd);
+static void			mgb_fct_control(struct mgb_softc *sc, int reg, int channel, enum mgb_fct_cmd cmd);
+
 /*
  * Probe for a mgb device. This is done by checking the device list.
  * If found, the name of the device is returned.
@@ -492,7 +498,7 @@ mgb_init(void *arg)
 	 * (will want to run this other places so should split
 	 * functionality and locking)
 	 */
-	/* error = */mgb_dma_init(dev);
+	/* error = */mgb_dma_init(sc->dev);
 	/* If an error occurs then stop! */
 
 	if_setdrvflagbits(sc->ifp, IFF_DRV_RUNNING, IFF_DRV_OACTIVE);
@@ -594,7 +600,7 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 }
 
 static int
-mgb_newbuf()
+mgb_newbuf(struct mgb_softc *sc, int idx)
 {
 	struct mbuf *m;
 	struct mgb_buffer_desc *desc;
@@ -618,7 +624,7 @@ mgb_newbuf()
 	map = desc->dmamap;
 	desc->dmamap = <SPAREMAP>;
 	<SPAREMAP> = desc->dmamap;
-	bus_dmamap_sync(sc->rx_buffer_data.tag, rxd->rx_dmamap,
+	bus_dmamap_sync(sc->rx_buffer_data.tag, desc->dmamap,
 	    BUS_DMASYNC_PREREAD);
 	desc->m = m;
 
@@ -807,10 +813,8 @@ mgb_dma_init(device_t dev)
 		}
 	}
 
-	mgb_dma_tx_ring_init();
-	mgb_dma_rx_ring_init();
-}
-
+	mgb_dma_tx_ring_init(sc);
+	mgb_dma_rx_ring_init(sc);
 
 fail:
 	return (error);
@@ -825,7 +829,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	memset(sc->rx_ring_data.ring, 0, MGB_DMA_RING_LIST_SIZE);
 
 	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = sc->rx_buffer_data.desc[i];
+		desc = &sc->rx_buffer_data.desc[i];
 		desc->m = NULL;
 		desc->ring_desc = &sc->rx_ring_data.ring[i];
 		if (i == 0)
@@ -838,7 +842,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	}
 
 	bus_dmamap_sync(sc->rx_buffer_data.tag,
-	    sc->rx_buffer_data.dmamap,
+	    sc->rx_ring_data.dmamap,
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 	mgb_dmac_rx_control(sc, 0, DMAC_RESET);
@@ -858,7 +862,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	/* Enable interrupt on completion and head pointer writeback */
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(0), MGB_DMA_HEAD_WB_ENBL);
 
-	ring_config = CSR_READ_REG(MGB_DMA_RX_CONFIG1(0));
+	ring_config = CSR_READ_REG(sc, MGB_DMA_RX_CONFIG1(0));
 	/*  ring size */
 	ring_config &= ~MGB_DMA_RING_LEN_MASK;
 	ring_config |= (MGB_DMA_RING_SIZE & MGB_DMA_RING_LEN_MASK);
@@ -873,9 +877,9 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	sc->rx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_RX_HEAD(0));
 
 	/* enable interrupts and so forth */
-	CSR_WRITE_REG(MGB_INTR_SET, MGB_INTR_STS_RX);
-	CSR_WRITE_REG(MGB_DMAC_INTR_STS, MGB_DMA_RX_INTR);
-	CSR_WRITE_REG(MGB_DMAC_INTR_ENBL_SET, MGB_DMA_RX_INTR);
+	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_RX);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL);
 
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_RESET);
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_ENABLE);
@@ -885,6 +889,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 static void
 mgb_dma_tx_ring_init(struct mgb_softc *sc)
 {
+	struct mgb_buffer_desc *desc;
 	int ring_config, i;
 
 	mgb_fct_control(sc, MGB_FCT_TX_CTL, 0, FCT_RESET);
@@ -892,7 +897,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	memset(sc->tx_ring_data.ring, 0, MGB_DMA_RING_LIST_SIZE);
 
 	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = sc->tx_buffer_data.desc[i];
+		desc = &sc->tx_buffer_data.desc[i];
 		desc->m = NULL;
 		desc->ring_desc = &sc->tx_ring_data.ring[i];
 		if (i == 0)
@@ -903,7 +908,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	}
 
 	bus_dmamap_sync(sc->tx_buffer_data.tag,
-	    sc->tx_buffer_data.dmamap,
+	    sc->tx_ring_data.dmamap,
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 	mgb_dmac_tx_control(sc, 0, DMAC_RESET);
@@ -915,7 +920,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	    CSR_TRANSLATE_ADDR_LOW32(sc->tx_ring_data.ring_bus_addr));
 
 	/* write ring size */
-	ring_config = CSR_READ_REG(MGB_DMA_TX_CONFIG1(0));
+	ring_config = CSR_READ_REG(sc, MGB_DMA_TX_CONFIG1(0));
 	ring_config &= ~MGB_DMA_RING_LEN_MASK;
 	ring_config |= (MGB_DMA_RING_SIZE & MGB_DMA_RING_LEN_MASK);
 	CSR_WRITE_REG(sc, MGB_DMA_TX_CONFIG1(0), ring_config);
@@ -935,8 +940,8 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(0), sc->tx_ring_data.last_tail);
 
 	/* enable interrupts and so forth */
-	CSR_WRITE_REG(MGB_INTR_SET, MGB_INTR_STS_TX);
-	CSR_WRITE_REG(MGB_DMAC_INTR_ENBL_SET, MGB_DMA_TX_INTR);
+	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TX);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL);
 
 	mgb_dmac_tx_control(sc, 0, DMAC_START);
 }
@@ -953,7 +958,7 @@ mgb_dma_teardown(device_t dev)
 	sc = device_get_softc(dev);
 	if(sc->dma_parent_tag != NULL) {
 		if(sc->rx_ring_data.tag != NULL) {
-			if(sc->rx_ring_data.busaddr != 0)
+			if(sc->rx_ring_data.head_wb_bus_addr != 0)
 				bus_dmamap_unload(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap);
 			if(sc->rx_ring_data.ring_info != NULL)
 				bus_dmamem_free(sc->rx_ring_data.tag, sc->rx_ring_data.ring_info, sc->rx_ring_data.dmamap);
@@ -961,7 +966,7 @@ mgb_dma_teardown(device_t dev)
 		}
 		if(sc->tx_ring_data.tag != NULL) {
 			if(sc->tx_ring_data.tag != NULL) {
-				if(sc->tx_ring_data.busaddr != 0)
+				if(sc->tx_ring_data.head_wb_bus_addr != 0)
 					bus_dmamap_unload(sc->tx_ring_data.tag, sc->tx_ring_data.dmamap);
 				if(sc->tx_ring_data.ring_info != NULL)
 					bus_dmamem_free(sc->tx_ring_data.tag, sc->tx_ring_data.ring_info, sc->tx_ring_data.dmamap);
@@ -1047,15 +1052,15 @@ mgb_fct_control(struct mgb_softc *sc, int reg, int channel, enum mgb_fct_cmd cmd
 {
 	switch (cmd) {
 	case FCT_RESET:
-		CSR_WRITE_REG(sc, reg, MGB_FCT_TX_RESET(channel));
-		mgb_wait_for_bits(sc, reg, 0, MGB_FCT_TX_RESET(channel));
+		CSR_WRITE_REG(sc, reg, MGB_FCT_RESET(channel));
+		mgb_wait_for_bits(sc, reg, 0, MGB_FCT_RESET(channel));
 		break;
 	case FCT_ENABLE:
-		CSR_WRITE_REG(sc, reg, MGB_FCT_TX_ENBL(channel));
+		CSR_WRITE_REG(sc, reg, MGB_FCT_ENBL(channel));
 		break;
 	case FCT_DISABLE:
-		CSR_WRITE_REG(sc, reg, MGB_FCT_TX_DSBL(channel));
-		mgb_wait_for_bits(sc, reg, 0, MGB_FCT_TX_ENBL(channel));
+		CSR_WRITE_REG(sc, reg, MGB_FCT_DSBL(channel));
+		mgb_wait_for_bits(sc, reg, 0, MGB_FCT_ENBL(channel));
 		break;
 	}
 }

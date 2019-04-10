@@ -129,6 +129,18 @@
 #define MGB_DMA_RX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
 #define MGB_DMA_RX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
 
+#define MGB_DMA_RING_LEN_MASK		0xFFFF
+#define MGB_DMA_IOC_ENBL		0x10000000
+#define MGB_DMA_HEAD_WB_ENBL		0x20
+#define MGB_DMA_RING_PAD_MASK		0x03000000
+#define MGB_DMA_RING_PAD_0		0x00000000
+#define MGB_DMA_RING_PAD_2		0x02000000
+
+
+
+#define MGB_DESC_CTL_OWN		(1 << 16)
+#define MGB_DESC_CTL_BUFLEN_MASK	(0x3FFF)
+
 #define MGB_NEXT_RING_IDX(_idx)		(((_idx) + 1) % MGB_DMA_RING_SIZE)
 #define MGB_RING_SPACE(_sc)		\
 	(((_sc->tx_ring_data.last_head - _sc->tx_ring_data.last_tail - 1) \
@@ -198,7 +210,7 @@ struct mgb_irq {
 };
 
 enum mgb_dmac_cmd { DMAC_RESET, DMAC_START, DMAC_STOP };
-enum mgb_dmac_cmd { FCT_RESET, FCT_ENABLE, FCT_DISABLE };
+enum mgb_fct_cmd { FCT_RESET, FCT_ENABLE, FCT_DISABLE };
 
 struct mgb_ring_desc_addr {
 	uint32_t				low;
@@ -230,7 +242,7 @@ struct mgb_buffer_desc {
 	struct mbuf			*m;
 	bus_dmamap_t			 dmamap;
 	struct mgb_ring_desc		*ring_desc;
-	struct mgb_buffer_data		*prev;
+	struct mgb_buffer_desc		*prev;
 };
 
 struct mgb_ring_data {
