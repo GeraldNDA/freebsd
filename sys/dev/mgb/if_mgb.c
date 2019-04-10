@@ -126,6 +126,8 @@ static int			mgb_ioctl(if_t, u_long, caddr_t);
 
 /* DMA helper functions*/
 static int			mgb_dma_alloc(device_t);
+static bus_dmamap_callback_t	mgb_ring_dmamap_bind;
+static bus_dmamap_callback_t	mgb_dmamap_bind;
 static int			mgb_dma_init(struct mgb_softc *);
 static void			mgb_dma_teardown(struct mgb_softc *);
 
@@ -383,7 +385,7 @@ mgb_attach(device_t dev)
 	}
 
 	error = mgb_dma_alloc(dev);
-	if(unlikely(error != 0)) {
+	if (unlikely(error != 0)) {
 		device_printf(dev, "MGB device DMA allocations failed.\n");
 		goto fail;
 	}
@@ -630,6 +632,7 @@ mgb_init(void *arg)
 	 * (will want to run this other places so should split
 	 * functionality and locking)
 	 */
+
 	if(mgb_dma_init(sc) != 0)
 		return;
 	/* If an error occurs then stop! */
@@ -814,7 +817,7 @@ mgb_ring_dmamap_bind(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	    ("%s: expected 1 DMA segment, found %d!", __func__, nsegs));
 
 	ring_data = (struct mgb_ring_data *)arg;
-	if (segs[0].ds_addr == 0) {
+	if (segs[0].ds_addr != 0) {
 		ring_data->head_wb_bus_addr = segs[0].ds_addr;
 		ring_data->ring_bus_addr = segs[0].ds_addr + sizeof(uint32_t);
 	}
@@ -875,7 +878,7 @@ mgb_dma_alloc(device_t dev)
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filter, filterarg */
 	    MGB_DMA_RING_INFO_SIZE,	/* maxsize */
-	    0,				/* nsegments */
+	    1,				/* nsegments */
 	    MGB_DMA_RING_INFO_SIZE,	/* maxsegsize */
 	    0,				/* flags */
 	    NULL, NULL,			/* lockfunc, lockarg */
@@ -892,7 +895,7 @@ mgb_dma_alloc(device_t dev)
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filter, filterarg */
 	    MGB_DMA_RING_INFO_SIZE,	/* maxsize */
-	    0,				/* nsegments */
+	    1,				/* nsegments */
 	    MGB_DMA_RING_INFO_SIZE,	/* maxsegsize */
 	    0,				/* flags */
 	    NULL, NULL,			/* lockfunc, lockarg */
