@@ -104,6 +104,8 @@ static void 			mgb_intr_enable(struct mgb_softc *);
 static void 			mgb_intr_disable(struct mgb_softc *);
 static bool 			mgb_intr_test(struct mgb_softc *);
 
+static void			mgb_rxeof(struct mgb_softc *sc);
+static void			mgb_txeof(struct mgb_softc *sc);
 /* MAC support */
 static void			mgb_get_ethaddr(struct mgb_softc *, caddr_t);
 
@@ -137,6 +139,8 @@ static int			mgb_dmac_reset(struct mgb_softc *);
 static int			mgb_phy_reset(struct mgb_softc *);
 
 static void			mgb_stop(struct mgb_softc *);
+static int			mgb_newbuf(struct mgb_softc *sc, int idx);
+static void			mgb_discard_rxbuf(struct mgb_softc *sc, int idx);
 
 static int 			mgb_dma_tx_ring_init(struct mgb_softc *);
 static int 			mgb_dma_rx_ring_init(struct mgb_softc *);
@@ -193,10 +197,15 @@ mgb_intr(void * arg)
 
 
 	sc = arg;
+	/* TODO: should lock this up */
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
 
+	/* turn off interrupts */
+	mgb_intr_disable(sc);
+
 	intr_sts &= intr_en;
+	/* XXX: Do test even if not UP ? */
 	if((intr_sts & MGB_INTR_STS_ANY) == 0)
 		return;
 	if(intr_sts &  MGB_INTR_STS_TEST) {
@@ -211,9 +220,82 @@ mgb_intr(void * arg)
 		mgb_txeof(sc);
 	}
 	if(intr_sts &  MGB_INTR_STS_RX) {
-		/* Do RX Stuff */
 		mgb_rxeof(sc);
 	}
+
+	/* re-enable interrupts */
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_en);
+
+}
+
+static void
+mgb_rxeof(struct mgb_softc *sc)
+{
+	struct mgb_buffer_desc *desc;
+	struct mbuf *m;
+	int head = *sc->rx_ring_data.head_wb;
+	int len;
+
+	/* Flush ring */
+	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
+	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+
+	while(head != sc->rx_ring_data.last_head) {
+		desc = &sc->rx_buffer_data.desc[sc->rx_ring_data.last_head];
+
+		if ((desc->ring_desc->ctl & MGB_DESC_CTL_OWN) != 0)
+			break;
+
+		/*
+		 * Multi-packet are not handled yet.
+		 *
+		 * Would involve chaining the mbufs and some h/w work
+		 */
+		if ((desc->ring_desc->ctl &
+		    (MGB_DESC_CTL_FS | MGB_DESC_CTL_LS)) == 0)
+			break;
+		len = MGB_DESC_GET_FRAME_LEN(desc->ring_desc);
+
+		/* forward to OS */
+		{
+			m = desc->m;
+			/* copy length */
+			m->m_len = len - ETHER_CRC_LEN;
+			m->m_pkthdr.len = m->m_len;
+			/* copy net if */
+			m->m_pkthdr.rcvif = sc->ifp;
+			/* do checksumming ... */
+			/* add vtag ... */
+			/* unlock before running this */
+			if_input(sc->ifp, m);
+			/* relock */
+		}
+
+
+		if(mgb_newbuf(sc, sc->rx_ring_data.last_head) != 0) {
+			if_inc_counter(sc->ifp, IFCOUNTER_IQDROPS, 1);
+			mgb_discard_rxbuf(sc, sc->rx_ring_data.last_head);
+			goto next;
+		}
+
+		sc->rx_ring_data.last_tail = sc->rx_ring_data.last_head;
+		sc->rx_ring_data.last_tail =
+		    MGB_NEXT_RING_IDX(sc->rx_ring_data.last_head);
+next:
+		head = *sc->rx_ring_data.head_wb;
+	}
+
+	/* Flush ring */
+	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
+	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+
+	CSR_WRITE_REG(sc, MGB_DMA_RX_TAIL(0), sc->rx_ring_data.last_tail);
+}
+
+static void
+mgb_txeof(struct mgb_softc *sc)
+{
+	/* do nothing */
 }
 
 static bool
@@ -391,9 +473,8 @@ mgb_attach(device_t dev)
 	/* if_setsendqready */
 	if_setmtu(sc->ifp, ETHERMTU);
 	if_setbaudrate(sc->ifp, IF_Mbps(1000));
-	if_setcapabilities(sc->ifp,
-	    IFCAP_HWCSUM | IFCAP_VLAN_MTU |
-	    IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTAGGING );
+	if_setcapabilities(sc->ifp, IFCAP_HWCSUM |
+	    IFCAP_VLAN_MTU | IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTAGGING);
 	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
 
 	mgb_intr_enable(sc);
@@ -691,6 +772,14 @@ mgb_newbuf(struct mgb_softc *sc, int idx)
 	desc->ring_desc->ctl = MGB_DESC_CTL_OWN |
 	    (segs[0].ds_len & MGB_DESC_CTL_BUFLEN_MASK);
 	return (error);
+}
+
+static void
+mgb_discard_rxbuf(struct mgb_softc *sc, int idx)
+{
+	/* Fill with zeros */
+	memset(sc->rx_buffer_data.desc[idx].ring_desc,
+	    0, sizeof(struct mgb_ring_desc));
 }
 
 /*

@@ -138,8 +138,14 @@
 
 
 
-#define MGB_DESC_CTL_OWN		(1 << 16)
-#define MGB_DESC_CTL_BUFLEN_MASK	(0x3FFF)
+#define MGB_DESC_CTL_OWN		(1 << 15)
+#define MGB_DESC_CTL_FS			(1 << 31)
+#define MGB_DESC_CTL_LS			(1 << 30)
+#define MGB_DESC_CTL_BUFLEN_MASK	(0x0000FFFF)
+#define MGB_DESC_STS_BUFLEN_MASK	(0x00003FFF)
+#define MGB_DESC_FRAME_LEN_MASK		(0x3FFF0000)
+#define MGB_DESC_GET_FRAME_LEN(_desc)	\
+	(((_desc->ctl) & MGB_DESC_FRAME_LEN_MASK) >> 16)
 
 #define MGB_NEXT_RING_IDX(_idx)		(((_idx) + 1) % MGB_DMA_RING_SIZE)
 #define MGB_RING_SPACE(_sc)		\
@@ -218,9 +224,9 @@ struct mgb_ring_desc_addr {
 };
 
 struct mgb_ring_desc {
-	uint32_t				ctl;
-	struct mgb_ring_desc_addr		addr;
-	uint32_t				sts;
+	uint32_t				ctl; /* data0 */
+	struct mgb_ring_desc_addr		addr; /* data(1|2) */
+	uint32_t				sts; /* data3 */
 };
 
 /* TODO: Combine RX and TX rings into a single tag/map */
