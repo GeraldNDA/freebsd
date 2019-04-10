@@ -64,16 +64,52 @@
 #define MGB_PHY_RESET			0x10
 #define MGB_PHY_READY			0x80
 
+/** FIFO Controller **/
+#define MGB_FCT_TX_CTL			0xC4
+#define MGB_FCT_RX_CTL			0xAC
+#define MGB_FCT_ENBL(_channel)		(1 << (28 + (_channel)))
+#define MGB_FCT_DSBL(_channel)		(1 << (24 + (_channel)))
+#define MGB_FCT_RESET(_channel)		(1 << (20 + (_channel)))
+
+
+
 /** DMA Controller **/
 #define MGB_DMAC_CMD			0xC0C
 #define MGB_DMAC_RESET			0x80000000
+#define MGB_DMAC_TX_RESET(_channel)	(1 << (24 + (_channel)))
+#define MGB_DMAC_TX_START(_channel)	(1 << (20 + (_channel)))
+#define MGB_DMAC_TX_STOP(_channel)	(1 << (16 + (_channel)))
+#define MGB_DMAC_RX_RESET(_channel)	(1 << (8 + (_channel)))
+#define MGB_DMAC_RX_START(_channel)	(1 << (4 + (_channel)))
+#define MGB_DMAC_RX_STOP(_channel)	(1 << (0 + (_channel)))
+#define MGB_DMAC_STATE(_start, _stop)	\
+	(((_start) ? 2 : 0) | ((_stop) ? 1 : 0))
+#define MGB_DMAC_STATE_INITIAL		MGB_DMAC_STATE(0, 0)
+#define MGB_DMAC_STATE_STARTED		MGB_DMAC_STATE(1, 0)
+#define MGB_DMAC_STATE_STOP_PENDING	MGB_DMAC_STATE(1, 1)
+#define MGB_DMAC_STATE_STOPPED		MGB_DMAC_STATE(0, 1)
+
+#define MGB_DMAC_INTR_STS		0xC10
+#define MGB_DMAC_INTR_ENBL_SET		0xC14
+#define MGB_DMAC_INTR_ENBL_CLR		0xC18
+#define MGB_DMAC_TX_INTR_ENBL		(0x1)
+#define MGB_DMAC_RX_INTR_ENBL		(0x1 << 8)
 
 /** DMA Rings **/
-#define MGB_DMA_RING_SIZE		16
-#define MGB_DMA_MAXSEGS			16
+/**
+ * Page size is 256 bytes so this matches
+ *
+ * Ring size, however, these could be tunable
+ * to be a multiple of 4 (max is 65532)
+ *
+ **/
+#define MGB_DMA_RING_SIZE		1024 /* in programming guide, this number is 100 */
+#define MGB_DMA_MAXSEGS			1024
 #define MGB_DMA_REG(reg, _channel)	(reg | (_channel << 6))
-#define MGB_DMA_DESC_RING_SIZE		\
-	(sizeof(struct mgb_descriptor_ring) * MGB_DMA_RING_SIZE)
+#define MGB_DMA_RING_LIST_SIZE		\
+	(sizeof(struct mgb_ring_desc) * MGB_DMA_RING_SIZE)
+#define MGB_DMA_RING_INFO_SIZE		\
+	(sizeof(uint32_t) + MGB_DMA_RING_LIST_SIZE)
 
 #define MGB_DMA_TX_CONFIG0(_channel)	MGB_DMA_REG(0x0D40, _channel)
 #define MGB_DMA_TX_CONFIG1(_channel)	MGB_DMA_REG(0x0D44, _channel)
@@ -92,6 +128,11 @@
 #define MGB_DMA_RX_HEAD_WB_L(_channel)	MGB_DMA_REG(0x0D54, _channel)
 #define MGB_DMA_RX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
 #define MGB_DMA_RX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
+
+#define MGB_NEXT_RING_IDX(_idx)		(((_idx) + 1) % MGB_DMA_RING_SIZE)
+#define MGB_RING_SPACE(_sc)		\
+	(((_sc->tx_ring_data.last_head - _sc->tx_ring_data.last_tail - 1) \
+	 + MGB_DMA_RING_SIZE ) % MGB_DMA_RING_SIZE )
 
 /** PHY **/
 #define MGB_MII_ACCESS			0x120
@@ -142,6 +183,9 @@
 #define CSR_READ_REG_BYTES(sc, reg, dest, cnt)	\
 	bus_read_region_1(sc->regs, reg, dest, cnt)
 
+#define CSR_TRANSLATE_ADDR_LOW32(addr)		((uint64_t) (addr) & 0xFFFFFFFF)
+#define CSR_TRANSLATE_ADDR_HIGH32(addr)		((uint64_t) (addr) >> 32)
+
 struct mgb_vendor_info {
 	uint16_t 	vid;
 	uint16_t 	did;
@@ -153,31 +197,52 @@ struct mgb_irq {
 	void				*handler;
 };
 
-struct mgb_descriptor_ring_addr {
-	uint32_t 	low;
-	uint32_t	high;
+enum mgb_dmac_cmd { DMAC_RESET, DMAC_START, DMAC_STOP };
+enum mgb_dmac_cmd { FCT_RESET, FCT_ENABLE, FCT_DISABLE };
+
+struct mgb_ring_desc_addr {
+	uint32_t				low;
+	uint32_t				high;
 };
 
-struct mgb_descriptor_ring {
+struct mgb_ring_desc {
 	uint32_t				ctl;
-	struct mgb_descriptor_ring_addr		addr;
+	struct mgb_ring_desc_addr		addr;
 	uint32_t				sts;
 };
+
+/* TODO: Combine RX and TX rings into a single tag/map */
+/* TODO: WoL */
+
+#if 0
+struct mgb_ring_info {
+	uint32_t				head_wb;
+	struct mgb_ring_desc			*ring;
+}
+#endif
+#define MGB_HEAD_WB_PTR(_ring_info_ptr)		\
+	((uint32_t *)(_ring_info_ptr))
+
+#define MGB_RING_PTR(_ring_info_ptr)		\
+	((struct mgb_ring_desc *)(MGB_HEAD_WB_PTR(_ring_info_ptr) + 1))
 
 struct mgb_buffer_desc {
 	struct mbuf			*m;
 	bus_dmamap_t			 dmamap;
-	struct mgb_descriptor_ring	*desc;
+	struct mgb_ring_desc		*ring_desc;
 	struct mgb_buffer_data		*prev;
 };
 
 struct mgb_ring_data {
 	bus_dma_tag_t			 tag;
-	struct mgb_descriptor_ring	*desc;
 	bus_dmamap_t			 dmamap;
-	bus_addr_t			 busaddr;
+	bus_addr_t			 head_wb_bus_addr;
+	bus_addr_t			 ring_bus_addr;
 
-	uint32_t			 head_write_back;
+	void				*ring_info;
+	uint32_t			*head_wb;
+	struct mgb_ring_desc		*ring;
+
 	uint32_t			 last_head;
 	uint32_t			 last_tail;
 };
@@ -194,7 +259,7 @@ struct mgb_softc {
 	struct resource			*regs;
 	struct mgb_irq			 irq;
 
-	int 				 isr_test_flag;
+	bool 				 isr_test_flag;
 
 	device_t			 miibus;
 
@@ -207,10 +272,9 @@ struct mgb_softc {
 	int				 timer;
 
 
-	bus_dma_tag_t			 ring_parent_tag;
+	bus_dma_tag_t			 dma_parent_tag;
 	struct mgb_ring_data		 rx_ring_data;
 	struct mgb_ring_data		 tx_ring_data;
-	bus_dma_tag_t			 buffer_parent_tag;
 	struct mgb_buffer_data		 rx_buffer_data;
 	struct mgb_buffer_data		 tx_buffer_data;
 
