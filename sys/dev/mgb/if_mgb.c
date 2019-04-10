@@ -602,16 +602,18 @@ mgb_ioctl(if_t ifp, u_long command, caddr_t data)
 static int
 mgb_newbuf(struct mgb_softc *sc, int idx)
 {
-	struct mbuf *m;
+	struct mbuf *m = NULL;
 	struct mgb_buffer_desc *desc;
 	bus_dma_segment_t segs[1];
 	bus_dmamap_t map;
-	int error, i, nsegs;
+	int error, /*i,*/ nsegs;
 
-	if(bus_dmamap_load_mbuf_sg(sc->rx_buffer_data.tag, <SPAREMAP>, m, segs, &nsegs, 0) != 0) {
+	error = bus_dmamap_load_mbuf_sg(sc->rx_buffer_data.tag, sc->rx_buffer_data.sparemap, m, segs, &nsegs, 0);
+	if(error != 0) {
 		m_freem(m);
 		return (ENOBUFS);
 	}
+
 	KASSERT(nsegs == 1, ("%s: expected 1 DMA segment, found %d!", __func__, nsegs));
 
 	desc = &sc->rx_buffer_data.desc[idx];
@@ -622,8 +624,8 @@ mgb_newbuf(struct mgb_softc *sc, int idx)
 		bus_dmamap_unload(sc->rx_buffer_data.tag, desc->dmamap);
 	}
 	map = desc->dmamap;
-	desc->dmamap = <SPAREMAP>;
-	<SPAREMAP> = desc->dmamap;
+	desc->dmamap = sc->rx_buffer_data.sparemap;
+	sc->rx_buffer_data.sparemap = desc->dmamap;
 	bus_dmamap_sync(sc->rx_buffer_data.tag, desc->dmamap,
 	    BUS_DMASYNC_PREREAD);
 	desc->m = m;
@@ -633,7 +635,7 @@ mgb_newbuf(struct mgb_softc *sc, int idx)
 	desc->ring_desc->addr.low = CSR_TRANSLATE_ADDR_LOW32(segs[0].ds_addr);
 	desc->ring_desc->addr.high = CSR_TRANSLATE_ADDR_HIGH32(segs[0].ds_addr);
 	desc->ring_desc->ctl = (MGB_DESC_CTL_OWN | (segs[0].ds_len & MGB_DESC_CTL_BUFLEN_MASK));
-	return 0;
+	return (error);
 }
 
 /*
@@ -671,6 +673,7 @@ mgb_ring_dmamap_bind(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	ring_data->ring_bus_addr = ring_data->head_wb_bus_addr + sizeof(uint32_t);
 }
 
+/* TODO: unused since ring_dmamap_bind does all necessary work */
 static void
 mgb_dmamap_bind(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 {
@@ -788,6 +791,12 @@ mgb_dma_init(device_t dev)
 	    &sc->rx_buffer_data.tag);
 	if (error != 0) {
 		device_printf(dev, "Couldn't create RX ring DMA tag.\n");
+		goto fail;
+	}
+
+	error = bus_dmamap_create(sc->rx_buffer_data.tag, 0, &sc->rx_buffer_data.sparemap);
+	if (error != 0) {
+		device_printf(dev, "<couldn't create spare rx dmamap>");
 		goto fail;
 	}
 

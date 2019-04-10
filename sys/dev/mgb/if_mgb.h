@@ -261,6 +261,7 @@ struct mgb_ring_data {
 
 struct mgb_buffer_data {
 	bus_dma_tag_t			 tag;
+	bus_dmamap_t			 sparemap;
 	struct mgb_buffer_desc		 desc[MGB_DMA_RING_SIZE];
 };
 
