@@ -97,9 +97,9 @@
 
 /** DMA Rings **/
 /**
- * Page size is 256 bytes so this matches
+ * Page size is 256 bytes
  *
- * Ring size, however, these could be tunable
+ * Ring size, however, these could be tunable (for RX & TX)
  * to be a multiple of 4 (max is 65532)
  *
  **/
