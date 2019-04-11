@@ -146,17 +146,13 @@ static void			mgb_discard_rxbuf(struct mgb_softc *sc, int idx);
 
 static int 			mgb_dma_tx_ring_init(struct mgb_softc *);
 static int 			mgb_dma_rx_ring_init(struct mgb_softc *);
-static int			mgb_dmac_tx_control(struct mgb_softc *, int,
-				    enum mgb_dmac_cmd);
-static int			mgb_dmac_rx_control(struct mgb_softc *, int,
+static int			mgb_dmac_control(struct mgb_softc *, int, int,
 				    enum mgb_dmac_cmd);
 static int			mgb_fct_control(struct mgb_softc *, int, int,
 				    enum mgb_fct_cmd);
 
-/*
- * Probe for a mgb device. This is done by checking the device list.
- * If found, the name of the device is returned.
- */
+
+
 static int
 mgb_probe(device_t dev)
 {
@@ -197,9 +193,9 @@ mgb_intr(void * arg)
 	struct mgb_softc *sc;
 	uint32_t intr_sts, intr_en;
 
-
 	sc = arg;
 	/* TODO: should lock this up */
+	device_printf(sc->dev, "Oh ... an interrupt occured.");
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
 
@@ -237,6 +233,8 @@ mgb_rxeof(struct mgb_softc *sc)
 	struct mbuf *m;
 	int head = *sc->rx_ring_data.head_wb;
 	int len;
+	
+	device_printf(sc->dev, "rxeof()\n");
 
 	/* Flush ring */
 	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
@@ -356,6 +354,7 @@ mgb_attach(device_t dev)
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
 	callout_init_mtx(&sc->watchdog, &sc->mtx, 0);
 
+	pci_enable_busmaster(dev);
 	/* Allocate bus resources for using PCI bus */
 	rid = PCIR_BAR(MGB_BAR);
 	sc->regs = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
@@ -577,9 +576,9 @@ mgb_stop(struct mgb_softc *sc)
 
 	/* stop fct and dmac */
 	/* XXX: Could potentially timeout */
-	mgb_dmac_rx_control(sc, 0, DMAC_STOP);
+	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_STOP);
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_DISABLE);
-	mgb_dmac_tx_control(sc, 0, DMAC_STOP);
+	mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_STOP);
 	mgb_fct_control(sc, MGB_FCT_TX_CTL, 0, FCT_DISABLE);
 
 	/* txeof ? */
@@ -695,6 +694,12 @@ mgb_qflush(if_t ifp)
 
 	sc = if_getsoftc(ifp);
 	device_printf(sc->dev, "qflush()\n");
+	device_printf(
+	    sc->dev, "RX_DROPPED_FRAMES: %d\n"
+	    "RX_TOTAL_FRAMES: %d\n",
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_DROPPED_FRAMES),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_TOTAL_FRAMES)
+	);
 }
 
 static int
@@ -1057,7 +1062,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	    sc->rx_ring_data.dmamap,
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-	mgb_dmac_rx_control(sc, 0, DMAC_RESET);
+	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_RESET);
 
 	/* write ring address */
 	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_H(0),
@@ -1089,9 +1094,11 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 	sc->rx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_RX_HEAD(0));
 
 	/* enable interrupts and so forth */
+	device_printf(sc->dev, "INTR INIT start FOR MGB\n");
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_RX);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL);
+	device_printf(sc->dev, "INTR INIT done FOR MGB\n");
 
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_RESET);
 	if (error != 0) {
@@ -1103,7 +1110,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 		device_printf(sc->dev, "Failed to enable RX FCT.\n");
 		goto fail;
 	}
-	mgb_dmac_rx_control(sc, 0, DMAC_START);
+	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_START);
 	if (error != 0)
 		device_printf(sc->dev, "Failed to start RX DMAC.\n");
 fail:
@@ -1127,7 +1134,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 		device_printf(sc->dev, "Failed to enable TX FCT.\n");
 		goto fail;
 	}
-	error = mgb_dmac_tx_control(sc, 0, DMAC_RESET);
+	error = mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_RESET);
 	if (error != 0) {
 		device_printf(sc->dev, "Failed to reset TX DMAC.\n");
 		goto fail;
@@ -1179,7 +1186,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TX);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL);
 
-	error = mgb_dmac_tx_control(sc, 0, DMAC_START);
+	error = mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_START);
 	if (error != 0)
 		device_printf(sc->dev, "Failed to start TX DMAC.\n");
 fail:
@@ -1247,63 +1254,33 @@ mgb_dma_teardown(struct mgb_softc *sc)
 }
 
 static int
-mgb_dmac_tx_control(struct mgb_softc *sc, int channel, enum mgb_dmac_cmd cmd)
+mgb_dmac_control(struct mgb_softc *sc, int start, int channel, enum mgb_dmac_cmd cmd)
 {
 	int error = 0;
 	switch (cmd) {
 	case DMAC_RESET:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_TX_RESET(channel));
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_RESET(start, channel));
 		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
-		    MGB_DMAC_TX_RESET(channel), 0);
+				0, MGB_DMAC_CMD_RESET(start, channel));
 		break;
 
 	case DMAC_START:
 		/* NOTE: this simplifies the logic, since it will never
 		 * try to start in STOP_PENDING, but it also increases work.
 		 */
-		error = mgb_dmac_tx_control(sc, channel, DMAC_STOP);
+		error = mgb_dmac_control(sc, start, channel, DMAC_STOP);
 		if (error != 0)
 			return error;
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_TX_START(channel));
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_START(start, channel));
 		break;
 
 	case DMAC_STOP:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_TX_STOP(channel));
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_STOP(start, channel));
 		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
-		    MGB_DMAC_TX_STOP(channel), MGB_DMAC_TX_START(channel));
+		    MGB_DMAC_CMD_STOP(start, channel), MGB_DMAC_CMD_START(start, channel));
 		break;
 	}
 	return error;
-}
-
-static int
-mgb_dmac_rx_control(struct mgb_softc *sc, int channel, enum mgb_dmac_cmd cmd)
-{
-	int error = 0;
-	switch (cmd) {
-	case DMAC_RESET:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RX_RESET(channel));
-		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
-		    MGB_DMAC_RX_RESET(channel), 0);
-		break;
-
-	case DMAC_START:
-		/* NOTE: this simplifies the logic, since it will never
-		 * try to start in STOP_PENDING, but it also increases work.
-		 */
-		error = mgb_dmac_rx_control(sc, channel, DMAC_STOP);
-		if (error != 0)
-			return error;
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RX_START(channel));
-		break;
-
-	case DMAC_STOP:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_RX_STOP(channel));
-		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
-		    MGB_DMAC_RX_STOP(channel), MGB_DMAC_RX_START(channel));
-		break;
-	}
-	return (error);
 }
 
 static int
@@ -1477,4 +1454,3 @@ MODULE_DEPEND(mgb, ether, 1, 1, 1);
 MODULE_DEPEND(mgb, miibus, 1, 1, 1);
 
 /*********************************************************************/
-

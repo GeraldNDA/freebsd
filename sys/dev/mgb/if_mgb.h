@@ -59,6 +59,10 @@
 #define MGB_MAC_ADDR_BASE_L		0x11C /** MAC address lower 4 bytes (read) register **/
 #define MGB_MAC_ADDR_BASE_H		0x118 /** MAC address upper 2 bytes (read) register **/
 
+/** MAC Statistics **/
+#define MGB_MAC_STAT_RX_DROPPED_FRAMES	0x1218
+#define MGB_MAC_STAT_RX_TOTAL_FRAMES	0x1254
+
 /** PHY Reset (via power management control) **/
 #define MGB_PMT_CTL			0x14 /** Power Management Control Register **/
 #define MGB_PHY_RESET			0x10
@@ -71,17 +75,15 @@
 #define MGB_FCT_DSBL(_channel)		(1 << (24 + (_channel)))
 #define MGB_FCT_RESET(_channel)		(1 << (20 + (_channel)))
 
-
-
 /** DMA Controller **/
 #define MGB_DMAC_CMD			0xC0C
 #define MGB_DMAC_RESET			0x80000000
-#define MGB_DMAC_TX_RESET(_channel)	(1 << (24 + (_channel)))
-#define MGB_DMAC_TX_START(_channel)	(1 << (20 + (_channel)))
-#define MGB_DMAC_TX_STOP(_channel)	(1 << (16 + (_channel)))
-#define MGB_DMAC_RX_RESET(_channel)	(1 << (8 + (_channel)))
-#define MGB_DMAC_RX_START(_channel)	(1 << (4 + (_channel)))
-#define MGB_DMAC_RX_STOP(_channel)	(1 << (0 + (_channel)))
+#define MGB_DMAC_TX_START		16
+#define MGB_DMAC_RX_START		0
+#define MGB_DMAC_CMD_VAL(s, o, ch)	(1 << ((s) + (o) + (ch)))
+#define MGB_DMAC_CMD_RESET(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 8, _ch)
+#define MGB_DMAC_CMD_START(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 4, _ch)
+#define MGB_DMAC_CMD_STOP(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 0, _ch)
 #define MGB_DMAC_STATE(_start, _stop)	\
 	(((_start) ? 2 : 0) | ((_stop) ? 1 : 0))
 #define MGB_DMAC_STATE_INITIAL		MGB_DMAC_STATE(0, 0)
@@ -93,7 +95,7 @@
 #define MGB_DMAC_INTR_ENBL_SET		0xC14
 #define MGB_DMAC_INTR_ENBL_CLR		0xC18
 #define MGB_DMAC_TX_INTR_ENBL		(0x1)
-#define MGB_DMAC_RX_INTR_ENBL		(0x1 << 8)
+#define MGB_DMAC_RX_INTR_ENBL		(0x1 << 16)
 
 /** DMA Rings **/
 /**
@@ -103,9 +105,10 @@
  * to be a multiple of 4 (max is 65532)
  *
  **/
+/* In linux driver these numbers are 50 and 65 for tx and rx .... */
 #define MGB_DMA_RING_SIZE		1024 /* in programming guide, this number is 100 */
 #define MGB_DMA_MAXSEGS			1024
-#define MGB_DMA_REG(reg, _channel)	(reg | (_channel << 6))
+#define MGB_DMA_REG(reg, _channel)	((reg) | ((_channel) << 6))
 #define MGB_DMA_RING_LIST_SIZE		\
 	(sizeof(struct mgb_ring_desc) * MGB_DMA_RING_SIZE)
 #define MGB_DMA_RING_INFO_SIZE		\
@@ -120,14 +123,14 @@
 #define MGB_DMA_TX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
 #define MGB_DMA_TX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
 
-#define MGB_DMA_RX_CONFIG0(_channel)	MGB_DMA_REG(0x0D40, _channel)
-#define MGB_DMA_RX_CONFIG1(_channel)	MGB_DMA_REG(0x0D44, _channel)
-#define MGB_DMA_RX_BASE_H(_channel)	MGB_DMA_REG(0x0D48, _channel)
-#define MGB_DMA_RX_BASE_L(_channel)	MGB_DMA_REG(0x0D4C, _channel)
-#define MGB_DMA_RX_HEAD_WB_H(_channel)	MGB_DMA_REG(0x0D50, _channel) /* head Writeback */
-#define MGB_DMA_RX_HEAD_WB_L(_channel)	MGB_DMA_REG(0x0D54, _channel)
-#define MGB_DMA_RX_HEAD(_channel)	MGB_DMA_REG(0x0D58, _channel)
-#define MGB_DMA_RX_TAIL(_channel)	MGB_DMA_REG(0x0D5C, _channel)
+#define MGB_DMA_RX_CONFIG0(_channel)	MGB_DMA_REG(0x0C40, _channel)
+#define MGB_DMA_RX_CONFIG1(_channel)	MGB_DMA_REG(0x0C44, _channel)
+#define MGB_DMA_RX_BASE_H(_channel)	MGB_DMA_REG(0x0C48, _channel)
+#define MGB_DMA_RX_BASE_L(_channel)	MGB_DMA_REG(0x0C4C, _channel)
+#define MGB_DMA_RX_HEAD_WB_H(_channel)	MGB_DMA_REG(0x0C50, _channel) /* head Writeback */
+#define MGB_DMA_RX_HEAD_WB_L(_channel)	MGB_DMA_REG(0x0C54, _channel)
+#define MGB_DMA_RX_HEAD(_channel)	MGB_DMA_REG(0x0C58, _channel)
+#define MGB_DMA_RX_TAIL(_channel)	MGB_DMA_REG(0x0C5C, _channel)
 
 #define MGB_DMA_RING_LEN_MASK		0xFFFF
 #define MGB_DMA_IOC_ENBL		0x10000000
@@ -136,8 +139,6 @@
 #define MGB_DMA_RING_PAD_0		0x00000000
 #define MGB_DMA_RING_PAD_2		0x02000000
 
-
-
 #define MGB_DESC_CTL_OWN		(1 << 15)
 #define MGB_DESC_CTL_FS			(1 << 31)
 #define MGB_DESC_CTL_LS			(1 << 30)
@@ -145,11 +146,11 @@
 #define MGB_DESC_STS_BUFLEN_MASK	(0x00003FFF)
 #define MGB_DESC_FRAME_LEN_MASK		(0x3FFF0000)
 #define MGB_DESC_GET_FRAME_LEN(_desc)	\
-	(((_desc->ctl) & MGB_DESC_FRAME_LEN_MASK) >> 16)
+	(((_desc)->ctl & MGB_DESC_FRAME_LEN_MASK) >> 16)
 
 #define MGB_NEXT_RING_IDX(_idx)		(((_idx) + 1) % MGB_DMA_RING_SIZE)
 #define MGB_RING_SPACE(_sc)		\
-	(((_sc->tx_ring_data.last_head - _sc->tx_ring_data.last_tail - 1) \
+	((((_sc)->tx_ring_data.last_head - (_sc)->tx_ring_data.last_tail - 1) \
 	 + MGB_DMA_RING_SIZE ) % MGB_DMA_RING_SIZE )
 
 /** PHY **/
@@ -174,32 +175,33 @@
 #define MGB_INTR_STS_TX			(0x1 << 16)
 #define MGB_INTR_STS_TEST		(0x2 << 8)
 
+
 #define MGB_STS_OK			( 0 )
 #define MGB_STS_TIMEOUT 		(-1 )
 
 #define CSR_READ_BYTE(sc, reg)		\
-	bus_read_1(sc->regs, reg)
+	bus_read_1((sc)->regs, reg)
 
 #define CSR_WRITE_BYTE(sc, reg, val)	\
-	bus_write_1(sc->regs, reg, val)
+	bus_write_1((sc)->regs, reg, val)
 
 #define CSR_UPDATE_BYTE(sc, reg, val)	\
 	CSR_WRITE_BYTE(sc, reg, CSR_READ_BYTE(sc, reg) | (val))
 
 #define CSR_READ_REG(sc, reg)		\
-	bus_read_4(sc->regs, reg)
+	bus_read_4((sc)->regs, reg)
 
 #define CSR_WRITE_REG(sc, reg, val)	\
-	bus_write_4(sc->regs, reg, val)
+	bus_write_4((sc)->regs, reg, val)
 
 #define CSR_UPDATE_REG(sc, reg, val)	\
 	CSR_WRITE_REG(sc, reg, CSR_READ_REG(sc, reg) | (val))
 
 #define CSR_READ_2_BYTES(sc, reg)	\
-	bus_read_2(sc->regs, reg)
+	bus_read_2((sc)->regs, reg)
 
 #define CSR_READ_REG_BYTES(sc, reg, dest, cnt)	\
-	bus_read_region_1(sc->regs, reg, dest, cnt)
+	bus_read_region_1((sc)->regs, reg, dest, cnt)
 
 #define CSR_TRANSLATE_ADDR_LOW32(addr)		((uint64_t) (addr) & 0xFFFFFFFF)
 #define CSR_TRANSLATE_ADDR_HIGH32(addr)		((uint64_t) (addr) >> 32)
@@ -221,13 +223,13 @@ enum mgb_fct_cmd { FCT_RESET, FCT_ENABLE, FCT_DISABLE };
 struct mgb_ring_desc_addr {
 	uint32_t				low;
 	uint32_t				high;
-};
+} __packed;
 
 struct mgb_ring_desc {
 	uint32_t				ctl; /* data0 */
 	struct mgb_ring_desc_addr		addr; /* data(1|2) */
 	uint32_t				sts; /* data3 */
-};
+} __packed;
 
 /* TODO: Combine RX and TX rings into a single tag/map */
 /* TODO: WoL */
