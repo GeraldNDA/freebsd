@@ -60,8 +60,20 @@
 #define MGB_MAC_ADDR_BASE_H		0x118 /** MAC address upper 2 bytes (read) register **/
 
 /** MAC Statistics **/
-#define MGB_MAC_STAT_RX_DROPPED_FRAMES	0x1218
-#define MGB_MAC_STAT_RX_TOTAL_FRAMES	0x1254
+#define MGB_MAC_STAT_RX_FCS_ERR_CNT	0x1200
+#define MGB_MAC_STAT_RX_ALIGN_ERR_CNT	0x1204
+#define MGB_MAC_STAT_RX_FRAG_ERR_CNT	0x1208
+#define MGB_MAC_STAT_RX_JABBER_ERR_CNT	0x120C
+#define MGB_MAC_STAT_RX_UNDER_ERR_CNT	0x1210
+#define MGB_MAC_STAT_RX_OVER_ERR_CNT	0x1214
+#define MGB_MAC_STAT_RX_DROPPED_CNT	0x1218
+#define MGB_MAC_STAT_RX_BROADCAST_CNT1	0x1220
+#define MGB_MAC_STAT_RX_BROADCAST_CNT	0x122C
+#define MGB_MAC_STAT_RX_FRAME_CNT	0x1254
+#define MGB_MAC_STAT_RX_DROPPED_CNT	0x1218
+#define MGB_MAC_STAT_RX_BROADCAST_CNT1	0x1220
+#define MGB_MAC_STAT_RX_BROADCAST_CNT	0x122C
+#define MGB_MAC_STAT_RX_FRAME_CNT	0x1254
 
 /** PHY Reset (via power management control) **/
 #define MGB_PMT_CTL			0x14 /** Power Management Control Register **/
@@ -303,9 +315,9 @@ struct mgb_softc {
 
 
 /* MTX macros */
-#define MGB_LOCK(_sc)			mtx_lock(_sc.mtx)
-#define MGB_UNLOCK(_sc)			mtx_unlock(_sc.mtx)
-#define MGB_LOCK_ASSERT(_sc)		mtx_assert(_sc.mtx, MA_OWNED)
+#define MGB_LOCK(_sc)			mtx_lock((_sc).mtx)
+#define MGB_UNLOCK(_sc)			mtx_unlock((_sc).mtx)
+#define MGB_LOCK_ASSERT(_sc)		mtx_assert((_sc).mtx, MA_OWNED)
 
 
 /* FLAGS */

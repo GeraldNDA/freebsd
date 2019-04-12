@@ -107,11 +107,11 @@ static bool 			mgb_intr_test(struct mgb_softc *);
 static void			mgb_rxeof(struct mgb_softc *sc);
 static void			mgb_txeof(struct mgb_softc *sc);
 /* MAC support */
-static void			mgb_get_ethaddr(struct mgb_softc *, caddr_t);
+static void			mgb_get_ethaddr(struct mgb_softc *, struct ether_addr *);
 
 /* MII methods */
-static int			mgb_miibus_readreg(device_t, int, int);
-static int			mgb_miibus_writereg(device_t, int, int, int);
+static miibus_readreg_t		mgb_miibus_readreg;
+static miibus_writereg_t	mgb_miibus_writereg;
 
 /* MII MEDIA support */
 static int			mgb_ifmedia_upd(struct ifnet *);
@@ -198,9 +198,10 @@ mgb_intr(void * arg)
 	device_printf(sc->dev, "Oh ... an interrupt occured.");
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
+	device_printf(sc->dev, "sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
 
 	/* turn off interrupts */
-	mgb_intr_disable(sc);
+	/* mgb_intr_disable(sc); */
 
 	intr_sts &= intr_en;
 	/* XXX: Do test even if not UP ? */
@@ -222,7 +223,7 @@ mgb_intr(void * arg)
 	}
 
 	/* re-enable interrupts */
-	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_en);
+	/* CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_en); */
 
 }
 
@@ -233,14 +234,14 @@ mgb_rxeof(struct mgb_softc *sc)
 	struct mbuf *m;
 	int head = *sc->rx_ring_data.head_wb;
 	int len;
-	
+
 	device_printf(sc->dev, "rxeof()\n");
 
 	/* Flush ring */
 	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	while(head != sc->rx_ring_data.last_head) {
+	while (head != sc->rx_ring_data.last_head) {
 		desc = &sc->rx_buffer_data.desc[sc->rx_ring_data.last_head];
 
 		if ((desc->ring_desc->ctl & MGB_DESC_CTL_OWN) != 0)
@@ -331,6 +332,7 @@ mgb_intr_enable(struct mgb_softc *sc)
 	/* Enable IRQs */
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY);
 }
+
 static void
 mgb_intr_disable(struct mgb_softc *sc)
 {
@@ -342,9 +344,9 @@ static int
 mgb_attach(device_t dev)
 {
 	struct mgb_softc *sc;
-	uint8_t ethaddr[ETHER_ADDR_LEN];
+	struct ether_addr ethaddr;
 	int error = 0, rid;
-	int msic, msixc;
+    	int msic, msixc;
 
 
 	sc = device_get_softc(dev);
@@ -389,7 +391,37 @@ mgb_attach(device_t dev)
 		goto fail;
 	}
 
-	mgb_get_ethaddr(sc, (caddr_t)ethaddr);
+	mgb_get_ethaddr(sc, &ethaddr);
+	if (ETHER_IS_BROADCAST(ethaddr.octet)) {
+		ether_fakeaddr(&ethaddr);
+		/* fakeaddr says it's unicast and local ... but it lies! */
+		ethaddr.octet[0] &= ~0x1;
+		ethaddr.octet[0] |= 0x2;
+	}
+	/** XXX: Disable any packet filtering test **/
+#if 0
+	/* set perfect filtering addr */
+	CSR_WRITE_REG(sc, 0x400, 0);
+	CSR_WRITE_REG(sc, 0x404,
+		ethaddr.octet[0] |
+		(ethaddr.octet[1] << 8) |
+		(ethaddr.octet[2] << 16) |
+		(ethaddr.octet[3] << 24)
+	);
+
+	CSR_WRITE_REG(sc, 0x400,
+		ethaddr.octet[4] |
+		(ethaddr.octet[5] << 8) |
+		0x80000000
+	);
+
+	/* enable perfect filtering */
+	CSR_UPDATE_REG(sc, 0x508, 0x2);
+#endif
+	/* disable perfect filtering */
+	CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2));
+	/* enable broadcast recieve */
+	CSR_UPDATE_REG(sc, 0x508, 0x400);
 
 	/* Attach MII Interface */
 	int phyaddr;
@@ -411,6 +443,8 @@ mgb_attach(device_t dev)
 		device_printf(dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
+	/** XXX: turn on link autonegotiation */
+	mgb_miibus_writereg(dev, 1, 0, 0x1200);
 
 
 	rid = 0; /* use INTx interrupts by default */
@@ -420,8 +454,8 @@ mgb_attach(device_t dev)
 	/* MSIX > MSI > INTx */
 	if (msixc > 0) {
 		msixc = 1; /* Request only one line */
-		if(pci_alloc_msix(dev, &msixc) == 0) {
-			if(msixc == 1) {
+		if (pci_alloc_msix(dev, &msixc) == 0) {
+			if (msixc == 1) {
 				sc->flags |= MGB_FLAG_MSIX;
 				rid = 1;
 				device_printf(dev, "Using 1 MSI-X lane.");
@@ -435,8 +469,8 @@ mgb_attach(device_t dev)
 
 	if (msixc == 0 && msic > 0) {
 		msic = 1; /* Request only one line */
-		if(pci_alloc_msi(dev, &msic) == 0) {
-			if(msic == 1) {
+		if (pci_alloc_msi(dev, &msic) == 0) {
+			if (msic == 1) {
 				sc->flags |= MGB_FLAG_MSI;
 				rid = 1;
 				device_printf(dev, "Using 1 MSI lane.");
@@ -480,10 +514,12 @@ mgb_attach(device_t dev)
 
 	mgb_intr_enable(sc);
 	/* Add IRQ handler */
+#if 0
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
+#endif
 
-	ether_ifattach(sc->ifp, ethaddr);
+	ether_ifattach(sc->ifp, ethaddr.octet);
 
 fail:
 	if (error)
@@ -515,7 +551,7 @@ mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 
 	sc = if_getsoftc(ifp);
 	miid = device_get_softc(sc->miibus);
-	if((if_getflags(ifp) & IFF_UP) == 0)
+	if ((if_getflags(ifp) & IFF_UP) == 0)
 		return;
 
 	mii_pollstat(miid);
@@ -532,29 +568,29 @@ mgb_detach(device_t dev)
 	sc = device_get_softc(dev);
 	uses_msi = (sc->flags & MGB_INTR_FLAG_MASK) != MGB_FLAG_INTX;
 
-	if(device_is_attached(dev)) {
+	if (device_is_attached(dev)) {
 		ether_ifdetach(sc->ifp);
 		mgb_stop(sc);
 		callout_drain(&sc->watchdog);
 	}
 
-	if(sc->miibus)
+	if (sc->miibus)
 		device_delete_child(dev, sc->miibus);
 	bus_generic_detach(dev);
 
-	if(sc->regs)
+	if (sc->regs)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    PCIR_BAR(MGB_BAR), sc->regs);
 
-	if(sc->irq.handler)
+	if (sc->irq.handler)
 		bus_teardown_intr(dev, sc->irq.res, sc->irq.handler);
-	if(sc->irq.res)
+	if (sc->irq.res)
 		bus_release_resource(dev, SYS_RES_IRQ,
 		    uses_msi ? 1 : 0, sc->irq.res);
-	if(uses_msi)
+	if (uses_msi)
 		pci_release_msi(dev);
 
-	if(sc->ifp)
+	if (sc->ifp)
 		if_free(sc->ifp);
 	/* DMA free */
 	mgb_dma_teardown(sc);
@@ -612,10 +648,10 @@ mgb_stop(struct mgb_softc *sc)
 }
 
 static void
-mgb_get_ethaddr(struct mgb_softc *sc, caddr_t dest)
+mgb_get_ethaddr(struct mgb_softc *sc, struct ether_addr *dest)
 {
-	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, dest, 4);
-	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, dest + 4, 2);
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, &dest->octet[0], 4);
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, &dest->octet[4], 2);
 }
 
 static void
@@ -632,7 +668,7 @@ mgb_init(void *arg)
 	 * functionality and locking)
 	 */
 
-	if(mgb_dma_init(sc) != 0)
+	if (mgb_dma_init(sc) != 0)
 		return;
 	/* If an error occurs then stop! */
 
@@ -696,9 +732,25 @@ mgb_qflush(if_t ifp)
 	device_printf(sc->dev, "qflush()\n");
 	device_printf(
 	    sc->dev, "RX_DROPPED_FRAMES: %d\n"
-	    "RX_TOTAL_FRAMES: %d\n",
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_DROPPED_FRAMES),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_TOTAL_FRAMES)
+	    "RX_TOTAL_FRAMES: %d\n"
+	    "RX_BROADCAST_FRAMES: %d\n"
+	    "RX_BROADCAST_BYTES: %d\n"
+	    "err1: %d\n"
+	    "err2: %d\n"
+	    "err3: %d\n"
+	    "err4: %d\n"
+	    "err5: %d\n"
+	    "err6: %d\n",
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_DROPPED_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAME_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT1),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FCS_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_ALIGN_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAG_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_JABBER_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_UNDER_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_OVER_ERR_CNT)
 	);
 }
 
@@ -1095,7 +1147,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 
 	/* enable interrupts and so forth */
 	device_printf(sc->dev, "INTR INIT start FOR MGB\n");
-	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_RX);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_RX);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL);
 	device_printf(sc->dev, "INTR INIT done FOR MGB\n");
@@ -1183,7 +1235,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(0), sc->tx_ring_data.last_tail);
 
 	/* enable interrupts and so forth */
-	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TX);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TX);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL);
 
 	error = mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_START);
@@ -1201,23 +1253,23 @@ mgb_dma_teardown(struct mgb_softc *sc)
 
 	/* XXX: May have to reset values to NULL */
 
-	if(sc->dma_parent_tag != NULL) {
-		if(sc->rx_ring_data.tag != NULL) {
-			if(sc->rx_ring_data.head_wb_bus_addr != 0)
+	if (sc->dma_parent_tag != NULL) {
+		if (sc->rx_ring_data.tag != NULL) {
+			if (sc->rx_ring_data.head_wb_bus_addr != 0)
 				bus_dmamap_unload(sc->rx_ring_data.tag,
 				    sc->rx_ring_data.dmamap);
-			if(sc->rx_ring_data.ring_info != NULL)
+			if (sc->rx_ring_data.ring_info != NULL)
 				bus_dmamem_free(sc->rx_ring_data.tag,
 				    sc->rx_ring_data.ring_info,
 				    sc->rx_ring_data.dmamap);
 			bus_dma_tag_destroy(sc->rx_ring_data.tag);
 		}
-		if(sc->tx_ring_data.tag != NULL) {
-			if(sc->tx_ring_data.tag != NULL) {
-				if(sc->tx_ring_data.head_wb_bus_addr != 0)
+		if (sc->tx_ring_data.tag != NULL) {
+			if (sc->tx_ring_data.tag != NULL) {
+				if (sc->tx_ring_data.head_wb_bus_addr != 0)
 					bus_dmamap_unload(sc->tx_ring_data.tag,
 					    sc->tx_ring_data.dmamap);
-				if(sc->tx_ring_data.ring_info != NULL)
+				if (sc->tx_ring_data.ring_info != NULL)
 					bus_dmamem_free(sc->tx_ring_data.tag,
 					     sc->tx_ring_data.ring_info,
 					     sc->tx_ring_data.dmamap);
@@ -1258,8 +1310,9 @@ mgb_dmac_control(struct mgb_softc *sc, int start, int channel, enum mgb_dmac_cmd
 {
 	int error = 0;
 	switch (cmd) {
-	case DMAC_RESET:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_RESET(start, channel));
+case DMAC_RESET:
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD,
+		    MGB_DMAC_CMD_RESET(start, channel));
 		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
 				0, MGB_DMAC_CMD_RESET(start, channel));
 		break;
@@ -1271,13 +1324,16 @@ mgb_dmac_control(struct mgb_softc *sc, int start, int channel, enum mgb_dmac_cmd
 		error = mgb_dmac_control(sc, start, channel, DMAC_STOP);
 		if (error != 0)
 			return error;
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_START(start, channel));
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD,
+		    MGB_DMAC_CMD_START(start, channel));
 		break;
 
 	case DMAC_STOP:
-		CSR_WRITE_REG(sc, MGB_DMAC_CMD, MGB_DMAC_CMD_STOP(start, channel));
+		CSR_WRITE_REG(sc, MGB_DMAC_CMD,
+		    MGB_DMAC_CMD_STOP(start, channel));
 		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
-		    MGB_DMAC_CMD_STOP(start, channel), MGB_DMAC_CMD_START(start, channel));
+		    MGB_DMAC_CMD_STOP(start, channel),
+		    MGB_DMAC_CMD_START(start, channel));
 		break;
 	}
 	return error;
@@ -1307,20 +1363,19 @@ mgb_hw_init(device_t dev)
 
 	sc = device_get_softc(dev);
 	error = mgb_hw_reset(sc);
-	if(unlikely(error != 0))
+	if (unlikely(error != 0))
 		goto fail;
 
 	mgb_mac_init(sc);
 
 	error = mgb_phy_reset(sc);
-	if(unlikely(error != 0))
+	if (unlikely(error != 0))
 		goto fail;
 
 	error = mgb_dmac_reset(sc);
-	if(unlikely(error != 0))
+	if (unlikely(error != 0))
 		goto fail;
 
-	/**ring initializations **/
 fail:
 	return error;
 }
@@ -1339,23 +1394,17 @@ mgb_mac_init(struct mgb_softc *sc)
 	 * enable automatic duplex detection and
 	 * automatic speed detection
 	 */
-	CSR_UPDATE_REG(
-		sc,
-		MGB_MAC_CR,
-		MGB_MAC_ADD_ENBL | MGB_MAC_ASD_ENBL
-	);
+	CSR_UPDATE_REG(sc, MGB_MAC_CR,
+	    MGB_MAC_ADD_ENBL | MGB_MAC_ASD_ENBL);
 	return MGB_STS_OK;
 }
 
 static int
 mgb_phy_reset(struct mgb_softc *sc)
 {
-	CSR_UPDATE_BYTE(
-		sc,
-		MGB_PMT_CTL,
-		MGB_PHY_RESET
-	);
-	if(mgb_wait_for_bits(sc, MGB_PMT_CTL, 0, MGB_PHY_RESET) == MGB_STS_TIMEOUT)
+	CSR_UPDATE_BYTE(sc, MGB_PMT_CTL, MGB_PHY_RESET);
+	if (mgb_wait_for_bits(sc, MGB_PMT_CTL, 0, MGB_PHY_RESET)
+	    == MGB_STS_TIMEOUT)
 		return MGB_STS_TIMEOUT;
 	return (mgb_wait_for_bits(sc, MGB_PMT_CTL, MGB_PHY_READY, 0));
 }
@@ -1376,14 +1425,16 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 	sc = device_get_softc(dev);
 
 	/* for 7430 must be 1, for 7431 must be external phy */
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if (mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY)
+	    == MGB_STS_TIMEOUT)
 		return EIO;
 	/* XXX Endian  */
 	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
 	mii_access |= (reg & MGB_MII_REG_ADDR_MASK) << MGB_MII_REG_ADDR_SHIFT;
 	mii_access |= MGB_MII_BUSY | MGB_MII_READ;
 	CSR_WRITE_REG(sc, MGB_MII_ACCESS, mii_access);
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if (mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY)
+	    == MGB_STS_TIMEOUT)
 		return EIO;
 	return (CSR_READ_2_BYTES(sc, MGB_MII_DATA));
 }
@@ -1397,7 +1448,8 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 
 	sc = device_get_softc(dev);
 
-	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
+	if (mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY)
+	    == MGB_STS_TIMEOUT)
 		return EIO;
 	/* XXX Endian  */
 	mii_access = (phy & MGB_MII_PHY_ADDR_MASK) << MGB_MII_PHY_ADDR_SHIFT;
