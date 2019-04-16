@@ -223,7 +223,7 @@ MODULE_VERSION(mgb, 2);
 
 #if 0 /* MIIBUS_DEBUG */
 /* If MIIBUS debug stuff is in attach then order matters. Use below instead. */
-DRIVER_MODULE_ORDERED(mgb, pci, mgb_driver, mgb_devclass, NULL, NULL,
+DRIVER_MODULE_ORDERED(miibus, mgb, miibus_driver, miibus_devclass, NULL, NULL,
     SI_ORDER_ANY);
 #endif /* MIIBUS_DEBUG */
 DRIVER_MODULE(miibus, mgb, miibus_driver, miibus_devclass, NULL, NULL);
@@ -348,7 +348,7 @@ mgb_attach_pre(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
 	struct ifmedia *ifm;
-
+	if_t ifp;
 	if_softc_ctx_t scctx;
 	int error;
 
@@ -358,6 +358,7 @@ mgb_attach_pre(if_ctx_t ctx)
 	sc = iflib_get_softc(ctx);
 	sc->ctx = ctx;
 	sc->dev = iflib_get_dev(ctx);
+	ifp = iflib_get_ifp(ctx);
 	ifm = iflib_get_media(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
 
@@ -411,7 +412,6 @@ mgb_attach_pre(if_ctx_t ctx)
 		goto fail;
 	}
 
-#if 0
 	switch(pci_get_device(sc->dev))
 	{
 	case MGB_LAN7430_DEVICE_ID:
@@ -422,25 +422,19 @@ mgb_attach_pre(if_ctx_t ctx)
 		phyaddr = MII_PHY_ANY;
 		break;
 	}
-	/* fails because of issue with memes */
-	error = mii_attach(sc->dev, &sc->miibus, sc->ifp,
+
+	error = mii_attach(sc->dev, &sc->miibus, ifp,
 	    ifm->ifm_change, ifm->ifm_status,
 	    BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
 	if(unlikely(error != 0)) {
 		device_printf(sc->dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
+#if 0
 
        	/* modify the miibus media to be the ifm one?*/
 	miid = device_get_softc(sc->miibus);
 	ifm = &miid->mii_media;
-
-	/* this should work */
-	/* this is what I did the first time */
-	scctx->isc_msix_bar = -1;
-	/* This also doesn't work ... */
-	scctx->isc_msix_bar = -1;
-	scctx->isc_disable_msix = true;
 #endif
 	mgb_intr_disable_all(ctx);
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
@@ -468,6 +462,7 @@ mgb_attach_post(if_ctx_t ctx)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
+	/* TODO: INTR TEST fails ... */
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
 	return (0);
@@ -568,7 +563,6 @@ mgb_init(if_ctx_t ctx)
 
 	mgb_dma_init(sc);
 	/* If an error occurs then stop! */
-
 	/* mii_mediachg(miid); */
 }
 
@@ -578,6 +572,7 @@ mgb_legacy_intr(void *xsc)
 	struct mgb_softc *sc;
 
 	sc = xsc;
+	device_printf(sc->dev, "Oh ... a legacy interrupt occurred.\n");
 	iflib_admin_intr_deferred(sc->ctx);
 	return (FILTER_SCHEDULE_THREAD);
 }
@@ -585,6 +580,10 @@ mgb_legacy_intr(void *xsc)
 static int
 mgb_rxq_intr(void *xsc)
 {
+	struct mgb_softc *sc;
+
+	sc = xsc;
+	device_printf(sc->dev, "Oh ... an RXQ interrupt occurred.\n");
 	return (FILTER_SCHEDULE_THREAD);
 }
 

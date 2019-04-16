@@ -298,18 +298,4 @@ struct mgb_softc {
 
 };
 
-
-/* MTX macros */
-#define MGB_LOCK(_sc)			mtx_lock((_sc).mtx)
-#define MGB_UNLOCK(_sc)			mtx_unlock((_sc).mtx)
-#define MGB_LOCK_ASSERT(_sc)		mtx_assert((_sc).mtx, MA_OWNED)
-
-
-/* FLAGS */
-#define MGB_FLAG_INTX			0x00000000
-#define MGB_FLAG_MSI			0x00000001
-#define MGB_FLAG_MSIX			0x00000002
-
-#define MGB_INTR_FLAG_MASK		0x3
-
 #endif /* _IF_MGB_H_ */
