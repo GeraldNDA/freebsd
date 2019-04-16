@@ -293,8 +293,11 @@ struct if_shared_ctx mgb_sctx_init = {
 	.isc_magic = IFLIB_MAGIC,
 
 	.isc_q_align = PAGE_SIZE,
-
-	.isc_admin_intrcnt = 0,
+	/*
+	 * setting admin_intrcnt to 0 (with nrxq/ntxq = 1) will confuse iflib.
+	 * It'll think we're using legacy interrupts !!!
+	 */
+	.isc_admin_intrcnt = 1,
 	/*.isc_flags =  IFLIB_GEN_MAC| IFLIB_HAS_RXCQ | IFLIB_HAS_TXCQ, */
 
 	.isc_vendor_info = mgb_vendor_info_array,
@@ -441,6 +444,16 @@ mgb_attach_pre(if_ctx_t ctx)
 #endif
 	mgb_intr_disable_all(ctx);
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
+	/** Setup PBA BAR **/
+	int rid = pci_msix_pba_bar(sc->dev);
+	if (rid != scctx->isc_msix_bar) {
+		sc->pba = bus_alloc_resource_any(sc->dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
+		if (unlikely(sc->pba == NULL)) {
+			error = ENXIO;
+		}
+	}
+	else
+		sc->pba = NULL;
 	/* iflib_gen_mac(ctx); */
 	return (0);
 
@@ -473,6 +486,11 @@ mgb_detach(if_ctx_t ctx)
 
 	if (sc->miibus != NULL)
 		device_delete_child(sc->dev, sc->miibus);
+	if (sc->pba != NULL)
+		error = bus_release_resource(sc->dev, SYS_RES_MEMORY,
+		    rman_get_rid(sc->pba), sc->pba);
+	sc->pba = NULL;
+
 	error = mgb_release_regs(sc);
 
 	return (error);

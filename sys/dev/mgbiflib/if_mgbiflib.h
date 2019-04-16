@@ -274,6 +274,8 @@ struct mgb_softc {
 	device_t			 dev;
 
 	struct resource			*regs;
+
+	struct resource			*pba;
 	struct if_irq			 admin_irq;
 	struct if_irq			 rx_irq;
 
