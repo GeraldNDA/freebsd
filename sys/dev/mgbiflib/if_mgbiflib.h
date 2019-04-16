@@ -106,8 +106,8 @@
 #define MGB_DMAC_INTR_STS		0xC10
 #define MGB_DMAC_INTR_ENBL_SET		0xC14
 #define MGB_DMAC_INTR_ENBL_CLR		0xC18
-#define MGB_DMAC_TX_INTR_ENBL		(0x1)
-#define MGB_DMAC_RX_INTR_ENBL		(0x1 << 16)
+#define MGB_DMAC_TX_INTR_ENBL(_ch)	(1 << (_ch))
+#define MGB_DMAC_RX_INTR_ENBL(_ch)	(1 << (16 + (_ch)))
 
 /** DMA Rings **/
 /**
@@ -183,9 +183,9 @@
 #define MGB_INTR_ENBL_CLR		0x78C
 #define MGB_INTR_TRIGGER		0x0200
 #define MGB_INTR_STS_ANY		(0x1)
-#define MGB_INTR_STS_RX			(0x1 << 24)
-#define MGB_INTR_STS_TX			(0x1 << 16)
-#define MGB_INTR_STS_TEST		(0x2 << 8)
+#define MGB_INTR_STS_RX(_channel)	(1 << (24 + (_channel)))
+#define MGB_INTR_STS_TX(_channel)	(1 << (16 + (_channel)))
+#define MGB_INTR_STS_TEST		(1 << 9)
 
 
 #define MGB_STS_OK			( 0 )
@@ -258,39 +258,24 @@ struct mgb_ring_info {
 #define MGB_RING_PTR(_ring_info_ptr)		\
 	((struct mgb_ring_desc *)(MGB_HEAD_WB_PTR(_ring_info_ptr) + 1))
 
-struct mgb_buffer_desc {
-	struct mbuf			*m;
-	bus_dmamap_t			 dmamap;
-	struct mgb_ring_desc		*ring_desc;
-	struct mgb_buffer_desc		*prev;
-};
-
 struct mgb_ring_data {
-	bus_dma_tag_t			 tag;
-	bus_dmamap_t			 dmamap;
-	bus_addr_t			 head_wb_bus_addr;
-	bus_addr_t			 ring_bus_addr;
-
-	void				*ring_info;
 	uint32_t			*head_wb;
 	struct mgb_ring_desc		*ring;
+
+	bus_addr_t			 head_wb_bus_addr;
+	bus_addr_t			 ring_bus_addr;
 
 	uint32_t			 last_head;
 	uint32_t			 last_tail;
 };
 
-struct mgb_buffer_data {
-	bus_dma_tag_t			 tag;
-	bus_dmamap_t			 sparemap;
-	struct mgb_buffer_desc		 desc[MGB_DMA_RING_SIZE];
-};
-
 struct mgb_softc {
-	if_t				 ifp;
+	if_ctx_t			 ctx;
 	device_t			 dev;
 
 	struct resource			*regs;
-	struct mgb_irq			 irq;
+	struct if_irq			 admin_irq;
+	struct if_irq			 rx_irq;
 
 	bool 				 isr_test_flag;
 
@@ -308,8 +293,6 @@ struct mgb_softc {
 	bus_dma_tag_t			 dma_parent_tag;
 	struct mgb_ring_data		 rx_ring_data;
 	struct mgb_ring_data		 tx_ring_data;
-	struct mgb_buffer_data		 rx_buffer_data;
-	struct mgb_buffer_data		 tx_buffer_data;
 
 };
 
