@@ -114,6 +114,9 @@ static ifdi_intr_enable_t		mgb_intr_enable_all;
 static ifdi_intr_disable_t		mgb_intr_disable_all;
 
 /* IFLIB_TXRX methods */
+static int				mgb_isc_txd_encap(void *, if_pkt_info_t);
+static void				mgb_isc_txd_flush(void *, uint16_t, qidx_t);
+static int 				mgb_isc_txd_credits_update(void *, uint16_t, bool);
 static int				mgb_isc_rxd_available(void *, uint16_t, qidx_t, qidx_t);
 static int				mgb_isc_rxd_pkt_get(void *, if_rxd_info_t);
 static void 				mgb_isc_rxd_refill(void * , if_rxd_update_t);
@@ -275,12 +278,10 @@ static driver_t mgb_iflib_driver = {
 };
 
 struct if_txrx mgb_txrx  = {
-#if 0 /* UNUSED_TXRX */
-	.ift_txd_encap = vmxnet3_isc_txd_encap,
-	.ift_txd_flush = vmxnet3_isc_txd_flush,
-	.ift_txd_credits_update = vmxnet3_isc_txd_credits_update,
-#endif /* UNUSED_TXRX */
-	.ift_rxd_available = mgb_isc_rxd_available,
+	.ift_txd_encap = mgb_isc_txd_encap, /* unimplemented */
+	.ift_txd_flush = mgb_isc_txd_flush, /* unimplemented */
+	.ift_txd_credits_update = mgb_isc_txd_credits_update, /* unimplemented */
+	.ift_rxd_available = mgb_isc_rxd_available, /* unimplemented */
 	.ift_rxd_pkt_get = mgb_isc_rxd_pkt_get, /* unimplemented */
 	.ift_rxd_refill = mgb_isc_rxd_refill, /* unimplemented */
 	.ift_rxd_flush = mgb_isc_rxd_flush, /* unimplemented */
@@ -357,7 +358,6 @@ mgb_attach_pre(if_ctx_t ctx)
 	ifm = iflib_get_media(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
 
-
 	/* IFLIB required setup */
 	scctx->isc_txrx = &mgb_txrx;
 	scctx->isc_tx_nsegments = MGB_DMA_MAXSEGS;
@@ -371,6 +371,25 @@ mgb_attach_pre(if_ctx_t ctx)
 
 	scctx->isc_nrxqsets = 1;
 	scctx->isc_ntxqsets = 1;
+
+	/* scctx->isc_tx_csum_flags = (CSUM_TCP | CSUM_UDP) | (CSUM_TCP_IPV6 | CSUM_UDP_IPV6) | CSUM_TSO */
+	scctx->isc_tx_csum_flags = 0;
+	scctx->isc_capabilities = scctx->isc_capenable = 0;
+#if 0
+	/*
+	 * iflib doesn't like capabilities = 0, so check needs to be disabled
+	 * CSUM, TSO and VLAN support are TBD
+	 */
+	    IFCAP_TXCSUM | IFCAP_TXCSUM_IPV6 |
+	    IFCAP_TSO4 | IFCAP_TSO6 |
+	    IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6 |
+	    IFCAP_VLAN_MTU | IFCAP_VLAN_HWTAGGING |
+	    IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTSO |
+	    IFCAP_JUMBO_MTU;
+	scctx->isc_capabilities |= IFCAP_LRO | IFCAP_VLAN_HWFILTER;
+#endif
+
+	pci_enable_busmaster(sc->dev);
 
 	/* get the BAR */
 	error = mgb_alloc_regs(sc);
@@ -414,13 +433,14 @@ mgb_attach_pre(if_ctx_t ctx)
 	ifm = &miid->mii_media;
 
 	/* this should work */
-	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/* this is what I did the first time */
 	scctx->isc_msix_bar = -1;
 	/* This also doesn't work ... */
 	scctx->isc_msix_bar = -1;
 	scctx->isc_disable_msix = true;
 #endif
+	mgb_intr_disable_all(ctx);
+	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/* iflib_gen_mac(ctx); */
 	return (0);
 
@@ -702,6 +722,33 @@ mgb_intr_test(struct mgb_softc *sc)
 }
 
 static int
+mgb_isc_txd_encap(void * xsc , if_pkt_info_t ipi)
+{
+	struct mgb_softc *sc;
+
+	sc = xsc;
+	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	return (0);
+}
+static void
+mgb_isc_txd_flush(void *xsc, uint16_t idx, qidx_t pidx)
+{
+	struct mgb_softc *sc;
+
+	sc = xsc;
+	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+}
+
+static int
+mgb_isc_txd_credits_update(void *xsc, uint16_t idx, bool clear)
+{
+	struct mgb_softc *sc;
+
+	sc = xsc;
+	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	return (0);
+}
+static int
 mgb_isc_rxd_available(void *xsc, uint16_t rxqid, qidx_t idx, qidx_t budget)
 {
 	struct mgb_softc *sc;
@@ -745,13 +792,16 @@ mgb_test_bar(struct mgb_softc *sc)
 {
 	/* Equivalent to chip_check_id */
 	/* XXX Endian */
-	uint32_t id_rev = CSR_READ_REG(sc, 0) >> 16;
-	if (id_rev == MGB_LAN7430_DEVICE_ID || id_rev == MGB_LAN7431_DEVICE_ID) {
-		device_printf(sc->dev, "ID check passed (ID: 0x%x)\n", id_rev);
+	uint32_t id_rev, dev_id, rev;
+       	id_rev = CSR_READ_REG(sc, 0);
+	dev_id = id_rev >> 16;
+	rev = id_rev & 0xFFFF;
+	if (dev_id == MGB_LAN7430_DEVICE_ID || dev_id == MGB_LAN7431_DEVICE_ID) {
+		device_printf(sc->dev, "ID check passed (ID: 0x%x, REV: 0x%x)\n", dev_id, rev);
 		return 0;
 	}
 	else {
-		device_printf(sc->dev, "ID check failed (ID: 0x%x)\n", id_rev);
+		device_printf(sc->dev, "ID check failed (ID: 0x%x, REV: 0x%x)\n", dev_id, rev);
 		return ENXIO;
 	}
 }
@@ -762,6 +812,7 @@ mgb_alloc_regs(struct mgb_softc *sc)
 	int rid;
 
 	rid = PCIR_BAR(MGB_BAR);
+	pci_enable_busmaster(sc->dev);
 	sc->regs = bus_alloc_resource_any(sc->dev, SYS_RES_MEMORY,
 	    &rid, RF_ACTIVE);
 	if (unlikely(sc->regs == NULL))
@@ -774,10 +825,12 @@ static int
 mgb_release_regs(struct mgb_softc *sc)
 {
 	int error = 0;
+
 	if (sc->regs != NULL)
 		error = bus_release_resource(sc->dev, SYS_RES_MEMORY,
 		    rman_get_rid(sc->regs), sc->regs);
 	sc->regs = NULL;
+	pci_disable_busmaster(sc->dev);
 	return error;
 }
 
