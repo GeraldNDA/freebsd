@@ -100,9 +100,12 @@ static device_register_t 		mgb_register;
 static ifdi_attach_pre_t		mgb_attach_pre;
 static ifdi_attach_post_t		mgb_attach_post;
 static ifdi_detach_t			mgb_detach;
-
+#if 0
 static ifdi_media_change_t		mgb_media_change;
 static ifdi_media_status_t 		mgb_media_status;
+#endif
+static int				mgb_media_change(if_t);
+static void 				mgb_media_status(if_t, struct ifmediareq *);
 
 static ifdi_tx_queues_alloc_t		mgb_tx_queues_alloc;
 static ifdi_rx_queues_alloc_t		mgb_rx_queues_alloc;
@@ -141,6 +144,7 @@ static int				mgb_test_bar(struct mgb_softc *);
 static int				mgb_alloc_regs(struct mgb_softc *);
 static int				mgb_release_regs(struct mgb_softc *);
 
+static void				mgb_get_ethaddr(struct mgb_softc *, struct ether_addr *);
 static int				mgb_dma_init(struct mgb_softc *);
 
 static int				mgb_wait_for_bits(struct mgb_softc *,
@@ -167,7 +171,6 @@ static void 			mgb_intr_disable(struct mgb_softc *);
 static void			mgb_rxeof(struct mgb_softc *sc);
 static void			mgb_txeof(struct mgb_softc *sc);
 /* MAC support */
-static void			mgb_get_ethaddr(struct mgb_softc *, struct ether_addr *);
 
 
 /* MII MEDIA support */
@@ -250,9 +253,9 @@ static device_method_t mgb_iflib_methods[] = {
 	DEVMETHOD(ifdi_intr_enable, mgb_intr_enable_all),
 	DEVMETHOD(ifdi_intr_disable, mgb_intr_disable_all),
 
+#if 0 /* UNUSED_IFLIB_METHODS */
 	DEVMETHOD(ifdi_media_status, mgb_media_status),
 	DEVMETHOD(ifdi_media_change, mgb_media_change),
-#if 0 /* UNUSED_IFLIB_METHODS */
 
 	DEVMETHOD(ifdi_stop, vmxnet3_stop),
 	DEVMETHOD(ifdi_multi_set, vmxnet3_multi_set),
@@ -299,7 +302,7 @@ struct if_shared_ctx mgb_sctx_init = {
 	 * It'll think we're using legacy interrupts !!!
 	 */
 	.isc_admin_intrcnt = 1,
-	/*.isc_flags =  IFLIB_GEN_MAC| IFLIB_HAS_RXCQ | IFLIB_HAS_TXCQ, */
+	.isc_flags =  IFLIB_GEN_MAC, /*| IFLIB_HAS_RXCQ | IFLIB_HAS_TXCQ, */
 
 	.isc_vendor_info = mgb_vendor_info_array,
 	.isc_driver_version = "1",
@@ -350,10 +353,10 @@ mgb_attach_pre(if_ctx_t ctx)
 	struct mgb_softc *sc;
 	if_t ifp;
 	if_softc_ctx_t scctx;
-	int error;
+	int error, phyaddr;
+	struct ether_addr hwaddr;
 
-	struct mii_data *miid __unused;
-	int phyaddr __unused;
+	struct mii_data *miid;
 
 	sc = iflib_get_softc(ctx);
 	sc->ctx = ctx;
@@ -423,7 +426,7 @@ mgb_attach_pre(if_ctx_t ctx)
 	}
 
 	error = mii_attach(sc->dev, &sc->miibus, ifp,
-	    iflib_media_change, iflib_media_status,
+	    mgb_media_change, mgb_media_status,
 	    BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
 	if(unlikely(error != 0)) {
 		device_printf(sc->dev, "Failed to attach MII interface\n");
@@ -444,7 +447,12 @@ mgb_attach_pre(if_ctx_t ctx)
 	}
 	else
 		sc->pba = NULL;
-	/* iflib_gen_mac(ctx); */
+	/* This call should be updated to be more like iflib_gen_mac ... (or at least same OUI :P) */
+	mgb_get_ethaddr(sc, &hwaddr);
+	if (ETHER_IS_BROADCAST(hwaddr.octet))
+		ether_fakeaddr(&hwaddr);
+	iflib_set_mac(ctx, hwaddr.octet);
+
 	return (0);
 
 fail:
@@ -497,29 +505,35 @@ mgb_detach(if_ctx_t ctx)
 }
 
 static int
-mgb_media_change(if_ctx_t ctx)
+mgb_media_change(if_t ifp)
 {
 	struct mii_data *miid;
 	struct mii_softc *miisc;
 	struct mgb_softc *sc;
+	if_ctx_t ctx;
+	int needs_reset = 0;
 
+	ctx = if_getsoftc(ifp);
 	sc = iflib_get_softc(ctx);
 	miid = device_get_softc(sc->miibus);
 	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
 		PHY_RESET(miisc);
 
-	return (mii_mediachg(miid));
+	needs_reset = mii_mediachg(miid);
+	if (needs_reset != 0)
+		(iflib_get_ifp(ctx))->if_init(ctx);
+	return (needs_reset);
 }
 
 static void
-mgb_media_status(if_ctx_t ctx, struct ifmediareq *ifmr)
+mgb_media_status(if_t ifp, struct ifmediareq *ifmr)
 {
 	struct mgb_softc *sc;
 	struct mii_data *miid;
 
-	sc = iflib_get_softc(ctx);
+	sc = iflib_get_softc(if_getsoftc(ifp));
 	miid = device_get_softc(sc->miibus);
-	if ((if_getflags(iflib_get_ifp(ctx)) & IFF_UP) == 0)
+	if ((if_getflags(ifp) & IFF_UP) == 0)
 		return;
 
 	mii_pollstat(miid);
@@ -683,7 +697,8 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		}
 
 		/* map vector */
-		CSR_WRITE_REG(sc, 0x7A0, (vectorid << (i << 2)));
+
+		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(vectorid, i));
 	}
 
 	/* Not actually mapping TX interrupts ... */
@@ -692,7 +707,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		iflib_softirq_alloc_generic(ctx, NULL, IFLIB_INTR_TX, NULL, i,
 		    irq_name);
 		/* don't map vector ... */
-		/* CSR_WRITE_REG(sc, 0x7A4, (vectorid << (i << 2))) */
+		/* CSR_WRITE_REG(sc, MGB_INTR_VEC_TX_MAP, MGB_INTR_VEC_MAP(vectorid, i)); */
 	}
 
 	if (error) {
@@ -709,7 +724,7 @@ mgb_intr_enable_all(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
 	if_softc_ctx_t scctx;
-	int i, dmac_enable = 0, intr_sts = 0;
+	int i, dmac_enable = 0, intr_sts = 0, vec_en = 0;
 
 	sc = iflib_get_softc(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
@@ -718,13 +733,15 @@ mgb_intr_enable_all(if_ctx_t ctx)
 	for (i = 0; i < scctx->isc_nrxqsets; i++) {
 		intr_sts |= MGB_INTR_STS_RX(i);
 		dmac_enable |= MGB_DMAC_RX_INTR_ENBL(i);
+		vec_en |= (i + 1) + 1;
 	}
 	for (i = 0; i < scctx->isc_ntxqsets; i++) {
 		intr_sts |= MGB_INTR_STS_TX(i);
+		/* no vectors for tx */
 		dmac_enable |= MGB_DMAC_TX_INTR_ENBL(i);
 	}
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_sts);
-	CSR_WRITE_REG(sc, 0x794, intr_sts);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, vec_en);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, dmac_enable);
 }
 
@@ -1035,7 +1052,7 @@ static int
 mgb_attach(device_t dev)
 {
 	struct mgb_softc *sc;
-	struct ether_addr ethaddr;
+	struct ether_addr hwaddr;
 	int error;
     	int msic, msixc;
 
@@ -1264,12 +1281,6 @@ mgb_stop(struct mgb_softc *sc)
 	}
 }
 
-static void
-mgb_get_ethaddr(struct mgb_softc *sc, struct ether_addr *dest)
-{
-	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, &dest->octet[0], 4);
-	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, &dest->octet[4], 2);
-}
 
 static void
 mgb_init(void *arg)
@@ -2037,6 +2048,13 @@ mgb_wait_for_bits(struct mgb_softc *sc, int reg, int set_bits, int clear_bits)
 	} while(i++ < MGB_TIMEOUT);
 
 	return MGB_STS_TIMEOUT;
+}
+
+static void
+mgb_get_ethaddr(struct mgb_softc *sc, struct ether_addr *dest)
+{
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_L, &dest->octet[0], 4);
+	CSR_READ_REG_BYTES(sc, MGB_MAC_ADDR_BASE_H, &dest->octet[4], 2);
 }
 
 static int

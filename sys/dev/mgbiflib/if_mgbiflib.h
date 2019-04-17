@@ -180,12 +180,19 @@
 #define MGB_INTR_STS			0x780
 #define MGB_INTR_SET			0x784
 #define MGB_INTR_ENBL_SET		0x788
-#define MGB_INTR_ENBL_CLR		0x78C
-#define MGB_INTR_TRIGGER		0x0200
 #define MGB_INTR_STS_ANY		(0x1)
 #define MGB_INTR_STS_RX(_channel)	(1 << (24 + (_channel)))
 #define MGB_INTR_STS_TX(_channel)	(1 << (16 + (_channel)))
 #define MGB_INTR_STS_TEST		(1 << 9)
+#define MGB_INTR_ENBL_CLR		0x78C
+
+#define MGB_INTR_VEC_ENBL_SET		0x794
+#define MGB_INTR_VEC_ENBL_CLR		0x798
+#define MGB_INTR_VEC_ENBL_AUTO_CLR	0x79C
+#define MGB_INTR_VEC_RX_MAP		0x7A0
+#define MGB_INTR_VEC_TX_MAP		0x7A4
+#define MGB_INTR_VEC_OTHER_MAP		0x7A8
+#define MGB_INTR_VEC_MAP(_v, _ch)	((_v) << ((_ch) << 2))
 
 
 #define MGB_STS_OK			( 0 )
