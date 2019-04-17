@@ -101,6 +101,9 @@ static ifdi_attach_pre_t		mgb_attach_pre;
 static ifdi_attach_post_t		mgb_attach_post;
 static ifdi_detach_t			mgb_detach;
 
+static ifdi_media_change_t		mgb_media_change;
+static ifdi_media_status_t 		mgb_media_status;
+
 static ifdi_tx_queues_alloc_t		mgb_tx_queues_alloc;
 static ifdi_rx_queues_alloc_t		mgb_rx_queues_alloc;
 static ifdi_queues_free_t		mgb_queues_free;
@@ -168,9 +171,6 @@ static void			mgb_get_ethaddr(struct mgb_softc *, struct ether_addr *);
 
 
 /* MII MEDIA support */
-static int			mgb_ifmedia_upd(struct ifnet *);
-static void			mgb_ifmedia_sts(struct ifnet *,
-				    struct ifmediareq *);
 
 /* IFNET methods */
 static int			mgb_transmit_init(if_t, struct mbuf *);
@@ -249,13 +249,14 @@ static device_method_t mgb_iflib_methods[] = {
 	DEVMETHOD(ifdi_rx_queue_intr_enable, mgb_rx_queue_intr_enable),
 	DEVMETHOD(ifdi_intr_enable, mgb_intr_enable_all),
 	DEVMETHOD(ifdi_intr_disable, mgb_intr_disable_all),
+
+	DEVMETHOD(ifdi_media_status, mgb_media_status),
+	DEVMETHOD(ifdi_media_change, mgb_media_change),
 #if 0 /* UNUSED_IFLIB_METHODS */
 
 	DEVMETHOD(ifdi_stop, vmxnet3_stop),
 	DEVMETHOD(ifdi_multi_set, vmxnet3_multi_set),
 	DEVMETHOD(ifdi_mtu_set, vmxnet3_mtu_set),
-	DEVMETHOD(ifdi_media_status, vmxnet3_media_status),
-	DEVMETHOD(ifdi_media_change, vmxnet3_media_change),
 	DEVMETHOD(ifdi_promisc_set, vmxnet3_promisc_set),
 	DEVMETHOD(ifdi_get_counter, vmxnet3_get_counter),
 	DEVMETHOD(ifdi_update_admin_status, vmxnet3_update_admin_status),
@@ -347,7 +348,6 @@ static int
 mgb_attach_pre(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
-	struct ifmedia *ifm;
 	if_t ifp;
 	if_softc_ctx_t scctx;
 	int error;
@@ -359,7 +359,6 @@ mgb_attach_pre(if_ctx_t ctx)
 	sc->ctx = ctx;
 	sc->dev = iflib_get_dev(ctx);
 	ifp = iflib_get_ifp(ctx);
-	ifm = iflib_get_media(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
 
 	/* IFLIB required setup */
@@ -424,18 +423,16 @@ mgb_attach_pre(if_ctx_t ctx)
 	}
 
 	error = mii_attach(sc->dev, &sc->miibus, ifp,
-	    ifm->ifm_change, ifm->ifm_status,
+	    iflib_media_change, iflib_media_status,
 	    BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
 	if(unlikely(error != 0)) {
 		device_printf(sc->dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
 
-#if 0
        	/* modify the miibus media to be the ifm one?*/
 	miid = device_get_softc(sc->miibus);
-	ifm = &miid->mii_media;
-#endif
+	scctx->isc_media = &miid->mii_media;
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/** Setup PBA BAR **/
 	int rid = pci_msix_pba_bar(sc->dev);
@@ -497,6 +494,37 @@ mgb_detach(if_ctx_t ctx)
 	error = mgb_release_regs(sc);
 
 	return (error);
+}
+
+static int
+mgb_media_change(if_ctx_t ctx)
+{
+	struct mii_data *miid;
+	struct mii_softc *miisc;
+	struct mgb_softc *sc;
+
+	sc = iflib_get_softc(ctx);
+	miid = device_get_softc(sc->miibus);
+	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
+		PHY_RESET(miisc);
+
+	return (mii_mediachg(miid));
+}
+
+static void
+mgb_media_status(if_ctx_t ctx, struct ifmediareq *ifmr)
+{
+	struct mgb_softc *sc;
+	struct mii_data *miid;
+
+	sc = iflib_get_softc(ctx);
+	miid = device_get_softc(sc->miibus);
+	if ((if_getflags(iflib_get_ifp(ctx)) & IFF_UP) == 0)
+		return;
+
+	mii_pollstat(miid);
+	ifmr->ifm_active = miid->mii_media_active;
+	ifmr->ifm_status = miid->mii_media_status;
 }
 
 static int
@@ -567,10 +595,11 @@ mgb_init(if_ctx_t ctx)
 	struct mii_data *miid __unused;
 
 	sc = iflib_get_softc(ctx);
-	/* miid = device_get_softc(sc->miibus); */
+	miid = device_get_softc(sc->miibus);
+
 	mgb_dma_init(sc);
-	/* If an error occurs then stop! */
-	/* mii_mediachg(miid); */
+
+	mii_mediachg(miid);
 }
 
 static int
@@ -1149,36 +1178,6 @@ fail:
 	return (error);
 }
 
-static int
-mgb_ifmedia_upd(struct ifnet *ifp)
-{
-	struct mii_data *miid;
-	struct mii_softc *miisc;
-	struct mgb_softc *sc;
-
-	sc = if_getsoftc(ifp);
-	miid = device_get_softc(sc->miibus);
-	LIST_FOREACH(miisc, &miid->mii_phys, mii_list)
-		PHY_RESET(miisc);
-
-	return (mii_mediachg(miid));
-}
-
-static void
-mgb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
-{
-	struct mgb_softc *sc;
-	struct mii_data *miid;
-
-	sc = if_getsoftc(ifp);
-	miid = device_get_softc(sc->miibus);
-	if ((if_getflags(ifp) & IFF_UP) == 0)
-		return;
-
-	mii_pollstat(miid);
-	ifmr->ifm_active = miid->mii_media_active;
-	ifmr->ifm_status = miid->mii_media_status;
-}
 
 static int
 mgb_detach(device_t dev)
