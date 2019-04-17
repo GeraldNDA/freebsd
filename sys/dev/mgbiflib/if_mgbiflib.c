@@ -412,6 +412,7 @@ mgb_attach_pre(if_ctx_t ctx)
 		goto fail;
 	}
 
+#if 0
 	switch(pci_get_device(sc->dev))
 	{
 	case MGB_LAN7430_DEVICE_ID:
@@ -430,13 +431,11 @@ mgb_attach_pre(if_ctx_t ctx)
 		device_printf(sc->dev, "Failed to attach MII interface\n");
 		goto fail;
 	}
-#if 0
 
        	/* modify the miibus media to be the ifm one?*/
 	miid = device_get_softc(sc->miibus);
 	ifm = &miid->mii_media;
 #endif
-	mgb_intr_disable_all(ctx);
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/** Setup PBA BAR **/
 	int rid = pci_msix_pba_bar(sc->dev);
@@ -462,7 +461,16 @@ mgb_attach_post(if_ctx_t ctx)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	/* TODO: INTR TEST fails ... */
+	/* VEC_EN_CLEAR */
+	CSR_WRITE_REG(sc, 0x798, ~0);
+	/* MAP0/1/2 */
+	CSR_WRITE_REG(sc, 0x7A0, 0);
+	CSR_WRITE_REG(sc, 0x7A4, 0);
+	CSR_WRITE_REG(sc, 0x7A8, 0);
+	/* VEC_EN => ANY */
+	CSR_WRITE_REG(sc, 0x794, 1);
+	CSR_WRITE_REG(sc, MGB_INTR_SET, ~0);
+
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
 	return (0);
@@ -560,7 +568,6 @@ mgb_init(if_ctx_t ctx)
 
 	sc = iflib_get_softc(ctx);
 	/* miid = device_get_softc(sc->miibus); */
-
 	mgb_dma_init(sc);
 	/* If an error occurs then stop! */
 	/* mii_mediachg(miid); */
@@ -594,18 +601,23 @@ mgb_admin_intr(void *xsc)
 	uint32_t intr_sts, intr_en;
 
 	sc = xsc;
+
+
 	device_printf(sc->dev, "Oh ... an interrupt occured.\n");
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
+#if 0
 	device_printf(sc->dev, "sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
+#endif
 
 	intr_sts &= intr_en;
 	/* XXX: Do test even if not UP ? */
 	if((intr_sts & MGB_INTR_STS_ANY) == 0)
-		return (FILTER_HANDLED);
+		return (FILTER_SCHEDULE_THREAD);
 	if(intr_sts &  MGB_INTR_STS_TEST) {
 		sc->isr_test_flag = true;
 		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
+		return (FILTER_HANDLED);
 	}
 	/* TODO: shouldn't continue if suspended! */
 	return (FILTER_SCHEDULE_THREAD);
@@ -616,7 +628,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 {
 	struct mgb_softc *sc;
 	if_softc_ctx_t scctx;
-	int error, i;
+	int error, i, vectorid;
 	char irq_name[16];
 
 	sc = iflib_get_softc(ctx);
@@ -627,27 +639,36 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		device_printf(iflib_get_dev(ctx), "Assumption that rxqsets and txqsets == 1 is false.\n");
 		return ENXIO;
 	}
+	/* First vector should be admin interrupts */
+	error = iflib_irq_alloc_generic(ctx, &sc->admin_irq, 1,
+	    IFLIB_INTR_ADMIN, mgb_admin_intr, sc, 0,
+	    "admin");
 
+	/* All other vectors will be RX/TX interrupts */
 	for (i = 0; i < scctx->isc_nrxqsets; i++) {
+		vectorid = (i + 1) + 1;
 		snprintf(irq_name, sizeof(irq_name), "rxq%d", i);
-		error = iflib_irq_alloc_generic(ctx, &sc->rx_irq, i + 1,
+		error = iflib_irq_alloc_generic(ctx, &sc->rx_irq, (i + 1) + 1,
 		    IFLIB_INTR_RX, mgb_rxq_intr, sc, i, irq_name);
 		if (error) {
 			device_printf(iflib_get_dev(ctx),
 			    "Failed to register rxq %d interrupt handler\n", i);
 			return (error);
 		}
+
+		/* map vector */
+		CSR_WRITE_REG(sc, 0x7A0, (vectorid << (i << 2)));
 	}
 
+	/* Not actually mapping TX interrupts ... */
 	for (i = 0; i < scctx->isc_ntxqsets; i++) {
 		snprintf(irq_name, sizeof(irq_name), "txq%d", i);
 		iflib_softirq_alloc_generic(ctx, NULL, IFLIB_INTR_TX, NULL, i,
 		    irq_name);
+		/* don't map vector ... */
+		/* CSR_WRITE_REG(sc, 0x7A4, (vectorid << (i << 2))) */
 	}
 
-	error = iflib_irq_alloc_generic(ctx, &sc->admin_irq,
-	    scctx->isc_nrxqsets + 1, IFLIB_INTR_ADMIN, mgb_admin_intr, sc, 0,
-	    "admin");
 	if (error) {
 		device_printf(iflib_get_dev(ctx),
 		    "Failed to register event interrupt handler\n");
@@ -677,6 +698,7 @@ mgb_intr_enable_all(if_ctx_t ctx)
 		dmac_enable |= MGB_DMAC_TX_INTR_ENBL(i);
 	}
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_sts);
+	CSR_WRITE_REG(sc, 0x794, intr_sts);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, dmac_enable);
 }
 
@@ -686,7 +708,6 @@ mgb_intr_disable_all(if_ctx_t ctx)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0);
 	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0);
 
@@ -700,6 +721,7 @@ mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
+	CSR_WRITE_REG(sc, 0x794, MGB_INTR_STS_RX(qid));
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_RX(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL(qid));
@@ -712,6 +734,7 @@ mgb_tx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
+	CSR_WRITE_REG(sc, 0x794, MGB_INTR_STS_TX(qid));
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TX(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_TX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL(qid));
@@ -725,7 +748,7 @@ mgb_intr_test(struct mgb_softc *sc)
 
 	sc->isr_test_flag = false;
 	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
-	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TEST);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY | MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
 	for (i = 0; i < MGB_TIMEOUT; i++) {
 		DELAY(10);
@@ -734,7 +757,6 @@ mgb_intr_test(struct mgb_softc *sc)
 	}
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
-
 	return sc->isr_test_flag;
 }
 
@@ -791,7 +813,7 @@ mgb_isc_rxd_refill(void *xsc, if_rxd_update_t iru)
 	struct mgb_softc *sc;
 
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s\n'", __func__);
+	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
 	return;
 }
 static void
@@ -800,7 +822,7 @@ mgb_isc_rxd_flush(void *xsc, uint16_t rxqid, uint8_t flid, qidx_t pidx)
 	struct mgb_softc *sc;
 
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s\n'", __func__);
+	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
 	return;
 }
 
@@ -997,7 +1019,6 @@ mgb_attach(device_t dev)
 
 	/* Prep mutex */
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
-	callout_init_mtx(&sc->watchdog, &sc->mtx, 0);
 
 	pci_enable_busmaster(dev);
 	/* Allocate bus resources for using PCI bus */
@@ -1174,7 +1195,6 @@ mgb_detach(device_t dev)
 	if (device_is_attached(dev)) {
 		ether_ifdetach(sc->ifp);
 		mgb_stop(sc);
-		callout_drain(&sc->watchdog);
 	}
 
 	if (sc->miibus)
