@@ -412,7 +412,6 @@ mgb_attach_pre(if_ctx_t ctx)
 		goto fail;
 	}
 
-#if 0
 	switch(pci_get_device(sc->dev))
 	{
 	case MGB_LAN7430_DEVICE_ID:
@@ -432,6 +431,7 @@ mgb_attach_pre(if_ctx_t ctx)
 		goto fail;
 	}
 
+#if 0
        	/* modify the miibus media to be the ifm one?*/
 	miid = device_get_softc(sc->miibus);
 	ifm = &miid->mii_media;
@@ -590,7 +590,7 @@ mgb_rxq_intr(void *xsc)
 	struct mgb_softc *sc;
 
 	sc = xsc;
-	device_printf(sc->dev, "Oh ... an RXQ interrupt occurred.\n");
+	device_printf(sc->dev, "RX INTR\n");
 	return (FILTER_SCHEDULE_THREAD);
 }
 
@@ -603,12 +603,9 @@ mgb_admin_intr(void *xsc)
 	sc = xsc;
 
 
-	device_printf(sc->dev, "Oh ... an interrupt occured.\n");
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
-#if 0
-	device_printf(sc->dev, "sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
-#endif
+	device_printf(sc->dev, "ADMIN INTR: sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
 
 	intr_sts &= intr_en;
 	/* XXX: Do test even if not UP ? */
@@ -751,7 +748,7 @@ mgb_intr_test(struct mgb_softc *sc)
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY | MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
 	for (i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(10);
+		DELAY(20);
 		if(sc->isr_test_flag)
 			break;
 	}
@@ -2049,7 +2046,7 @@ mgb_miibus_readreg(device_t dev, int phy, int reg)
 	struct mgb_softc *sc;
 	int mii_access;
 
-	sc = device_get_softc(dev);
+	sc = iflib_get_softc(device_get_softc(dev));
 	/* for 7430 must be 1, for 7431 must be external phy */
 	if (mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY)
 	    == MGB_STS_TIMEOUT)
