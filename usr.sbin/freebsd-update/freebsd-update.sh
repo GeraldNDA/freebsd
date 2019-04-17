@@ -690,8 +690,8 @@ fetchupgrade_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	# If a non-default bootloader is being used the bootfile, "/kernel"
-	# may be returned by sysctl. In this case, assume the default location.
+	# With old kernels, "/kernel" may be returned by sysctl.
+	# In this case, assume the default location.
 	KERNELDIR=${KERNELDIR:-/boot/kernel}
 
 	if ! [ -d ${KERNELDIR} ] ||
@@ -838,8 +838,8 @@ install_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	# If a non-default bootloader is being used the bootfile, "/kernel"
-	# may be returned by sysctl. In this case, assume the default location.
+	# With old kernels, "/kernel" may be returned by sysctl.
+	# In this case, assume the default location.
 	KERNELDIR=${KERNELDIR:-/boot/kernel}
 
 	if ! [ -d ${KERNELDIR} ] ||
@@ -937,8 +937,8 @@ IDS_check_params () {
 	# Figure out what directory contains the running kernel
 	BOOTFILE=`sysctl -n kern.bootfile`
 	KERNELDIR=${BOOTFILE%/kernel}
-	# If a non-default bootloader is being used the bootfile, "/kernel"
-	# may be returned by sysctl. In this case, assume the default location.
+	# With old kernels, "/kernel" may be returned by sysctl.
+	# In this case, assume the default location.
 	KERNELDIR=${KERNELDIR:-/boot/kernel}
 
 	if ! [ -d ${KERNELDIR} ] ||
