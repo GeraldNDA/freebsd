@@ -193,6 +193,8 @@
 #define MGB_INTR_VEC_TX_MAP		0x7A4
 #define MGB_INTR_VEC_OTHER_MAP		0x7A8
 #define MGB_INTR_VEC_MAP(_v, _ch)	((_v) << ((_ch) << 2))
+#define MGB_INTR_VEC_STS(_v)		(1 << (_v))
+#define MGB_INTR_RX_VEC_STS(_qid)	MGB_INTR_VEC_STS((_qid) + 2)
 
 
 #define MGB_STS_OK			( 0 )

@@ -100,12 +100,6 @@ static device_register_t 		mgb_register;
 static ifdi_attach_pre_t		mgb_attach_pre;
 static ifdi_attach_post_t		mgb_attach_post;
 static ifdi_detach_t			mgb_detach;
-#if 0
-static ifdi_media_change_t		mgb_media_change;
-static ifdi_media_status_t 		mgb_media_status;
-#endif
-static int				mgb_media_change(if_t);
-static void 				mgb_media_status(if_t, struct ifmediareq *);
 
 static ifdi_tx_queues_alloc_t		mgb_tx_queues_alloc;
 static ifdi_rx_queues_alloc_t		mgb_rx_queues_alloc;
@@ -137,6 +131,9 @@ static bool 				mgb_intr_test(struct mgb_softc *);
 /* MII methods */
 static miibus_readreg_t			mgb_miibus_readreg;
 static miibus_writereg_t		mgb_miibus_writereg;
+
+static int				mgb_media_change(if_t);
+static void 				mgb_media_status(if_t, struct ifmediareq *);
 
 /* Helper/Test functions */
 static int				mgb_test_bar(struct mgb_softc *);
@@ -254,9 +251,6 @@ static device_method_t mgb_iflib_methods[] = {
 	DEVMETHOD(ifdi_intr_disable, mgb_intr_disable_all),
 
 #if 0 /* UNUSED_IFLIB_METHODS */
-	DEVMETHOD(ifdi_media_status, mgb_media_status),
-	DEVMETHOD(ifdi_media_change, mgb_media_change),
-
 	DEVMETHOD(ifdi_stop, vmxnet3_stop),
 	DEVMETHOD(ifdi_multi_set, vmxnet3_multi_set),
 	DEVMETHOD(ifdi_mtu_set, vmxnet3_mtu_set),
@@ -269,6 +263,9 @@ static device_method_t mgb_iflib_methods[] = {
 
 	DEVMETHOD(ifdi_vlan_register, vmxnet3_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, vmxnet3_vlan_unregister),
+
+	DEVMETHOD(ifdi_media_status, mgb_media_status),
+	DEVMETHOD(ifdi_media_change, mgb_media_change),
 
 	DEVMETHOD(ifdi_shutdown, vmxnet3_shutdown),
 	DEVMETHOD(ifdi_suspend, vmxnet3_suspend),
@@ -453,6 +450,11 @@ mgb_attach_pre(if_ctx_t ctx)
 		ether_fakeaddr(&hwaddr);
 	iflib_set_mac(ctx, hwaddr.octet);
 
+	/* Clear all vector maps */
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, 0);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_TX_MAP, 0);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_OTHER_MAP, 0);
+
 	return (0);
 
 fail:
@@ -466,15 +468,6 @@ mgb_attach_post(if_ctx_t ctx)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	/* VEC_EN_CLEAR */
-	CSR_WRITE_REG(sc, 0x798, ~0);
-	/* MAP0/1/2 */
-	CSR_WRITE_REG(sc, 0x7A0, 0);
-	CSR_WRITE_REG(sc, 0x7A4, 0);
-	CSR_WRITE_REG(sc, 0x7A8, 0);
-	/* VEC_EN => ANY */
-	CSR_WRITE_REG(sc, 0x794, 1);
-	CSR_WRITE_REG(sc, MGB_INTR_SET, ~0);
 
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
@@ -728,18 +721,20 @@ mgb_intr_enable_all(if_ctx_t ctx)
 
 	sc = iflib_get_softc(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
-	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY);
+	intr_sts |= MGB_INTR_STS_ANY;
+	vec_en |= MGB_INTR_STS_ANY;
 
 	for (i = 0; i < scctx->isc_nrxqsets; i++) {
 		intr_sts |= MGB_INTR_STS_RX(i);
 		dmac_enable |= MGB_DMAC_RX_INTR_ENBL(i);
-		vec_en |= (i + 1) + 1;
+		vec_en |= MGB_INTR_RX_VEC_STS(i);
 	}
 	for (i = 0; i < scctx->isc_ntxqsets; i++) {
 		intr_sts |= MGB_INTR_STS_TX(i);
 		/* no vectors for tx */
 		dmac_enable |= MGB_DMAC_TX_INTR_ENBL(i);
 	}
+	CSR_WRITE_REG(sc, MGB_INTR_SET, intr_sts);
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_sts);
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, vec_en);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, dmac_enable);
@@ -752,6 +747,7 @@ mgb_intr_disable_all(if_ctx_t ctx)
 
 	sc = iflib_get_softc(ctx);
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_CLR, ~0);
 	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0);
 
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, ~0);
@@ -764,7 +760,8 @@ mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	CSR_WRITE_REG(sc, 0x794, MGB_INTR_STS_RX(qid));
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, MGB_INTR_RX_VEC_STS(qid));
+	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_RX(qid));
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_RX(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL(qid));
@@ -777,7 +774,7 @@ mgb_tx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	CSR_WRITE_REG(sc, 0x794, MGB_INTR_STS_TX(qid));
+	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TX(qid));
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TX(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_TX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL(qid));
@@ -791,6 +788,7 @@ mgb_intr_test(struct mgb_softc *sc)
 
 	sc->isr_test_flag = false;
 	CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, MGB_INTR_STS_ANY);
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY | MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
 	for (i = 0; i < MGB_TIMEOUT; i++) {
