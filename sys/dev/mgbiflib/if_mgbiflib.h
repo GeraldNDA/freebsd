@@ -37,6 +37,9 @@
 
 #define unlikely(x)                     __builtin_expect(!!(x), 0)
 
+/* Based on the one defined in if_muge.c */
+#define ETHER_IS_ZERO(addr) \
+	((addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]) == 0)
 
 #define MGB_MICROCHIP_VENDOR_ID		0x1055
 #define MGB_LAN7430_DEVICE_ID		0x7430

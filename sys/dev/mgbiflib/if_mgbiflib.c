@@ -162,36 +162,6 @@ static int				mgb_dmac_control(struct mgb_softc *, int, int,
 					    enum mgb_dmac_cmd);
 static int				mgb_fct_control(struct mgb_softc *, int, int,
 					    enum mgb_fct_cmd);
-#if 0 /* UNUSED_MGB_FUNCTIONS_1 */
-/* MSI Interrupts support */
-/* Interrupt helper functions */
-static void 			mgb_intr_enable(struct mgb_softc *);
-static void 			mgb_intr_disable(struct mgb_softc *);
-
-static void			mgb_rxeof(struct mgb_softc *sc);
-static void			mgb_txeof(struct mgb_softc *sc);
-/* MAC support */
-
-
-/* MII MEDIA support */
-
-/* IFNET methods */
-static int			mgb_transmit_init(if_t, struct mbuf *);
-static void			mgb_qflush(if_t);
-static int			mgb_ioctl(if_t, u_long, caddr_t);
-
-/* DMA helper functions*/
-static int			mgb_dma_alloc(device_t);
-static bus_dmamap_callback_t	mgb_ring_dmamap_bind;
-static bus_dmamap_callback_t	mgb_dmamap_bind;
-static void			mgb_dma_teardown(struct mgb_softc *);
-
-
-static void			mgb_stop(struct mgb_softc *);
-static int			mgb_newbuf(struct mgb_softc *sc, int idx);
-static void			mgb_discard_rxbuf(struct mgb_softc *sc, int idx);
-
-#endif /* UNUSED_MGB_FUNCTIONS_1 */
 
 /*********************************************************************
  *  FreeBSD Device Interface Entry Points
@@ -333,17 +303,14 @@ struct if_shared_ctx mgb_sctx_init = {
 	.isc_nfl = 1, /* XXX: one free list for each receive command queue */
 #if 0 /* UNUSED_CTX */
 
-
 	.isc_tso_maxsize = VMXNET3_TSO_MAXSIZE + sizeof(struct ether_vlan_header),
 	.isc_tso_maxsegsize = VMXNET3_TX_MAXSEGSIZE,
-
-
 #endif /* UNUSED_CTX */
 };
 
 /*********************************************************************/
 
-// struct callout timer;
+/* struct callout timer; */
 
 static void *
 mgb_register(device_t dev)
@@ -448,11 +415,19 @@ mgb_attach_pre(if_ctx_t ctx)
 		sc->pba = bus_alloc_resource_any(sc->dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
 		if (unlikely(sc->pba == NULL)) {
 			error = ENXIO;
+			device_printf(sc->dev, "Failed to setup PBA BAR\n");
+			goto fail;
 		}
 	}
-	/* This call should be updated to be more like iflib_gen_mac ... (or at least same OUI :P) */
+
+	/*
+	 * XXX: This call should be updated to be more like iflib_gen_mac ...
+	 * (or at least same OUI :P)
+	 */
 	mgb_get_ethaddr(sc, &hwaddr);
-	if (ETHER_IS_BROADCAST(hwaddr.octet))
+	if (unlikely(ETHER_IS_BROADCAST(hwaddr.octet) ||
+	    ETHER_IS_MULTICAST(hwaddr.octet) ||
+	    ETHER_IS_ZERO(hwaddr.octet)))
 		ether_fakeaddr(&hwaddr);
 	iflib_set_mac(ctx, hwaddr.octet);
 
@@ -478,7 +453,7 @@ mgb_attach_post(if_ctx_t ctx)
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
 
-	// callout_init(&timer, 1);
+	/* callout_init(&timer, 1); */
 	return (0);
 }
 
@@ -488,7 +463,7 @@ mgb_detach(if_ctx_t ctx)
 	struct mgb_softc *sc;
 	int error;
 
-	// callout_drain(&timer);
+	/* callout_drain(&timer); */
 
 	sc = iflib_get_softc(ctx);
 	/* Release IRQs */
@@ -618,9 +593,9 @@ mgb_init(if_ctx_t ctx)
 	device_printf(sc->dev, "running init ...\n");
 
 	mgb_dma_init(sc);
-	/* XXX: Turn off perfect filtering, turn on broadcast rx */
-	// CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2));
-	CSR_UPDATE_REG(sc, 0x508, 0x2);
+	/* XXX: Turn off perfect filtering, turn on (broad|multi|uni)cast rx */
+	CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2)); /* Disable Perfect Filtering */
+	/* CSR_UPDATE_REG(sc, 0x508, 0x2); */
 	CSR_UPDATE_REG(sc, 0x508, 0x400);
 	CSR_UPDATE_REG(sc, 0x508, 0x200);
 	CSR_UPDATE_REG(sc, 0x508, 0x100);
@@ -704,21 +679,24 @@ mgb_admin_intr(void *xsc)
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
 
 	intr_sts &= intr_en;
-	if((intr_sts & MGB_INTR_STS_ANY) == 0)
+	if ((intr_sts & MGB_INTR_STS_ANY) == 0)
 	{
 		device_printf(sc->dev, "NOT OURS ...\n");
 		return (FILTER_SCHEDULE_THREAD);
 	}
-	if((intr_sts &  MGB_INTR_STS_TEST) != 0) {
+	if ((intr_sts &  MGB_INTR_STS_TEST) != 0)
+	{
 		sc->isr_test_flag = true;
 		/* device_printf(sc->dev, "ADMIN_INTR for TEST"); */
 		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
 		return (FILTER_HANDLED);
 	}
-	if((intr_sts & MGB_INTR_STS_RX(0)) == 0) {
+	if ((intr_sts & MGB_INTR_STS_RX(0)) == 0)
+	{
 		device_printf(sc->dev, "ADMIN_INTR for RX[0]");
 	}
-	if((intr_sts & MGB_INTR_STS_TX(0)) == 0) {
+	if ((intr_sts & MGB_INTR_STS_TX(0)) == 0)
+	{
 		device_printf(sc->dev, "ADMIN_INTR for TX[0]");
 	}
 	device_printf(sc->dev, "NOT HANDLED  ...\n");
@@ -738,8 +716,8 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 	sc = iflib_get_softc(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
 
-	if(scctx->isc_nrxqsets == scctx->isc_ntxqsets == 1) {}
-	else {
+	if(!(scctx->isc_nrxqsets == scctx->isc_ntxqsets == 1))
+	{
 		device_printf(iflib_get_dev(ctx), "Assumption that rxqsets and txqsets == 1 is false.\n");
 		return ENXIO;
 	}
@@ -748,6 +726,11 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 	error = iflib_irq_alloc_generic(ctx, &sc->admin_irq, vectorid,
 	    IFLIB_INTR_ADMIN, mgb_admin_intr, sc, 0,
 	    "admin");
+	if (error) {
+		device_printf(iflib_get_dev(ctx),
+		    "Failed to register admin interrupt handler\n");
+		return (error);
+	}
 
 	/* All other vectors will be RX/TX interrupts */
 	for (i = 0; i < scctx->isc_nrxqsets; i++) {
@@ -773,12 +756,6 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		    irq_name);
 		/* don't map vector ... */
 		/* CSR_WRITE_REG(sc, MGB_INTR_VEC_TX_MAP, MGB_INTR_VEC_MAP(vectorid, i)); */
-	}
-
-	if (error) {
-		device_printf(iflib_get_dev(ctx),
-		    "Failed to register event interrupt handler\n");
-		return (error);
 	}
 
 	return (0);
