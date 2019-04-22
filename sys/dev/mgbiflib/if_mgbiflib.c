@@ -106,6 +106,7 @@ static ifdi_rx_queues_alloc_t		mgb_rx_queues_alloc;
 static ifdi_queues_free_t		mgb_queues_free;
 
 static ifdi_init_t			mgb_init;
+static ifdi_stop_t			mgb_stop;
 
 static ifdi_msix_intr_assign_t		mgb_msix_intr_assign;
 static ifdi_tx_queue_intr_enable_t	mgb_tx_queue_intr_enable;
@@ -131,6 +132,8 @@ static bool 				mgb_intr_test(struct mgb_softc *);
 /* MII methods */
 static miibus_readreg_t			mgb_miibus_readreg;
 static miibus_writereg_t		mgb_miibus_writereg;
+static miibus_linkchg_t			mgb_miibus_linkchg;
+static miibus_statchg_t			mgb_miibus_statchg;
 
 static int				mgb_media_change(if_t);
 static void 				mgb_media_status(if_t, struct ifmediareq *);
@@ -208,6 +211,8 @@ static device_method_t mgb_methods[] = {
 	/* MII Interface */
 	DEVMETHOD(miibus_readreg,	mgb_miibus_readreg),
 	DEVMETHOD(miibus_writereg,	mgb_miibus_writereg),
+	DEVMETHOD(miibus_linkchg,	mgb_miibus_linkchg),
+	DEVMETHOD(miibus_statchg,	mgb_miibus_statchg),
 
 	DEVMETHOD_END
 };
@@ -239,6 +244,7 @@ static device_method_t mgb_iflib_methods[] = {
 	DEVMETHOD(ifdi_detach, mgb_detach),
 
 	DEVMETHOD(ifdi_init, mgb_init),
+	DEVMETHOD(ifdi_stop, mgb_stop),
 
 	DEVMETHOD(ifdi_tx_queues_alloc, mgb_tx_queues_alloc),
 	DEVMETHOD(ifdi_rx_queues_alloc, mgb_rx_queues_alloc),
@@ -251,7 +257,6 @@ static device_method_t mgb_iflib_methods[] = {
 	DEVMETHOD(ifdi_intr_disable, mgb_intr_disable_all),
 
 #if 0 /* UNUSED_IFLIB_METHODS */
-	DEVMETHOD(ifdi_stop, vmxnet3_stop),
 	DEVMETHOD(ifdi_multi_set, vmxnet3_multi_set),
 	DEVMETHOD(ifdi_mtu_set, vmxnet3_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, vmxnet3_promisc_set),
@@ -307,25 +312,25 @@ struct if_shared_ctx mgb_sctx_init = {
 
 	.isc_ntxqs = 2, /* One for wb, One for ring */
 
-	.isc_tx_maxsize = MGB_DMA_MAXSEGS * MCLBYTES,
+	.isc_tx_maxsize = MGB_DMA_RING_SIZE  * MCLBYTES,
 	/* .isc_tx_nsegments = MGB_DMA_MAXSEGS, */
 	.isc_tx_maxsegsize = MCLBYTES,
 
 	.isc_ntxd_min = {1, 1}, // Will want to make this bigger
-	.isc_ntxd_max = {1, 1},
-	.isc_ntxd_default = {1, 1},
+	.isc_ntxd_max = {MGB_DMA_RING_SIZE, 1},
+	.isc_ntxd_default = {MGB_DMA_RING_SIZE, 1},
 
 	.isc_nrxqs = 2, /* One for wb, one for ring */
 
-	.isc_rx_maxsize =  MCLBYTES,
+	.isc_rx_maxsize = MCLBYTES,
 	.isc_rx_nsegments = 1,
 	.isc_rx_maxsegsize = MCLBYTES,
 
 	.isc_nrxd_min = {1, 1}, // Will want to make this bigger
-	.isc_nrxd_max = {1, 1},
-	.isc_nrxd_default = {1, 1},
+	.isc_nrxd_max = {MGB_DMA_RING_SIZE, 1},
+	.isc_nrxd_default = {MGB_DMA_RING_SIZE, 1},
 
-	.isc_nfl = 2, /* one free list for each receive command queue */
+	.isc_nfl = 1, /* XXX: one free list for each receive command queue */
 #if 0 /* UNUSED_CTX */
 
 
@@ -337,6 +342,8 @@ struct if_shared_ctx mgb_sctx_init = {
 };
 
 /*********************************************************************/
+
+// struct callout timer;
 
 static void *
 mgb_register(device_t dev)
@@ -363,7 +370,7 @@ mgb_attach_pre(if_ctx_t ctx)
 
 	/* IFLIB required setup */
 	scctx->isc_txrx = &mgb_txrx;
-	scctx->isc_tx_nsegments = MGB_DMA_MAXSEGS;
+	scctx->isc_tx_nsegments =  MGB_DMA_RING_SIZE; // MGB_DMA_MAXSEGS;
 	/* Ring desc queues */
 	scctx->isc_txqsizes[0] = sizeof(struct mgb_ring_desc) * scctx->isc_ntxd[0];
 	scctx->isc_rxqsizes[0] = sizeof(struct mgb_ring_desc) * scctx->isc_nrxd[0];
@@ -421,7 +428,7 @@ mgb_attach_pre(if_ctx_t ctx)
 		phyaddr = MII_PHY_ANY;
 		break;
 	}
-
+	/* would be nice if it called iflib media methods ... diving into ifp struct is messy ... */
 	error = mii_attach(sc->dev, &sc->miibus, ifp,
 	    mgb_media_change, mgb_media_status,
 	    BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
@@ -430,9 +437,9 @@ mgb_attach_pre(if_ctx_t ctx)
 		goto fail;
 	}
 
-       	/* modify the miibus media to be the ifm one?*/
 	miid = device_get_softc(sc->miibus);
 	scctx->isc_media = &miid->mii_media;
+
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/** Setup PBA BAR **/
 	int rid = pci_msix_pba_bar(sc->dev);
@@ -442,8 +449,6 @@ mgb_attach_pre(if_ctx_t ctx)
 			error = ENXIO;
 		}
 	}
-	else
-		sc->pba = NULL;
 	/* This call should be updated to be more like iflib_gen_mac ... (or at least same OUI :P) */
 	mgb_get_ethaddr(sc, &hwaddr);
 	if (ETHER_IS_BROADCAST(hwaddr.octet))
@@ -471,6 +476,8 @@ mgb_attach_post(if_ctx_t ctx)
 
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
+
+	// callout_init(&timer, 1);
 	return (0);
 }
 
@@ -479,6 +486,8 @@ mgb_detach(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
 	int error;
+
+	// callout_drain(&timer);
 
 	sc = iflib_get_softc(ctx);
 	/* Release IRQs */
@@ -545,6 +554,7 @@ mgb_tx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 	sc = iflib_get_softc(ctx);
 	rdata = &sc->tx_ring_data; /* there should only be one ring set */
 	for (q = 0; q < ntxqsets; q++) {
+		KASSERT(ntxqs == 2, ("ntxqs = %d", ntxqs));
 		/* Ring */
 		rdata->ring =
 		    (struct mgb_ring_desc *) vaddrs[q * ntxqs + 0];
@@ -599,14 +609,76 @@ static void
 mgb_init(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
-	struct mii_data *miid __unused;
+	struct mii_data *miid;
+	int error;
 
 	sc = iflib_get_softc(ctx);
 	miid = device_get_softc(sc->miibus);
+	device_printf(sc->dev, "running init ...\n");
 
 	mgb_dma_init(sc);
+	/* XXX: Turn off perfect filtering, turn on broadcast rx */
+	// CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2));
+	CSR_UPDATE_REG(sc, 0x508, 0x2);
+	CSR_UPDATE_REG(sc, 0x508, 0x400);
+	CSR_UPDATE_REG(sc, 0x508, 0x200);
+	CSR_UPDATE_REG(sc, 0x508, 0x100);
 
-	mii_mediachg(miid);
+
+	/** XXX: turn on link autonegotiation */
+	mgb_miibus_writereg(sc->dev, 1, 0, 0x1200);
+	// callout_reset(&timer, hz / 2, (timeout_t *)mgb_rxq_intr, sc);
+
+	error = mii_mediachg(miid);
+	KASSERT(!error, ("mii_mediachg returned: %d", error));
+}
+
+static void
+mgb_stop(if_ctx_t ctx)
+{
+	struct mgb_softc *sc;
+
+	sc = iflib_get_softc(ctx);
+	// callout_stop(&timer);
+#if 0
+	device_printf(sc->dev, "head = 0x%08x, head_wb = 0x%08x\n\n", CSR_READ_REG(sc, MGB_DMA_RX_HEAD(0)), *(sc->rx_ring_data.head_wb));
+	for (int i = 0; i < 1024; i++) {
+		device_printf(sc->dev, "ring[%d].own = %s\n", i, (sc->rx_ring_data.ring[i].ctl & MGB_DESC_CTL_OWN) ? "DEVICE_OWNED" : "DRIVER_OWNED");
+	}
+	printf("\n");
+	device_printf(sc->dev, "tail = 0x%08x\n\n", CSR_READ_REG(sc, MGB_DMA_RX_TAIL(0)));
+
+	/* DEBUG: Print stats */
+	device_printf(
+	    sc->dev, "RX_DROPPED_FRAMES: %d\n"
+	    "RX_TOTAL_FRAMES: %d\n"
+	    "RX_BROADCAST_FRAMES: %d\n"
+	    "RX_BROADCAST_BYTES: %d\n"
+	    "err1: %d\n"
+	    "err2: %d\n"
+	    "err3: %d\n"
+	    "err4: %d\n"
+	    "err5: %d\n"
+	    "err6: %d\n",
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_DROPPED_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAME_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT1),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FCS_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_ALIGN_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAG_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_JABBER_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_UNDER_ERR_CNT),
+	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_OVER_ERR_CNT)
+	);
+
+	/* stop fct and dmac */
+#endif
+	/* XXX: Could potentially timeout */
+	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_STOP);
+	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_DISABLE);
+	mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_STOP);
+	mgb_fct_control(sc, MGB_FCT_TX_CTL, 0, FCT_DISABLE);
 }
 
 static int
@@ -620,13 +692,31 @@ mgb_legacy_intr(void *xsc)
 	return (FILTER_SCHEDULE_THREAD);
 }
 
+static void
+mgb_dump_all_stats(struct mgb_softc *sc)
+{
+	int first_stat = 0x1200;
+	int last_stat = 0x12FC;
+
+	for(int i = first_stat; i <= last_stat; i += 4)
+		if (CSR_READ_REG(sc, i) != 0)
+			device_printf(sc->dev, "0x%04x: 0x%08x\n", i, CSR_READ_REG(sc, i));
+
+}
+
 static int
 mgb_rxq_intr(void *xsc)
 {
 	struct mgb_softc *sc;
 
 	sc = xsc;
+
 	device_printf(sc->dev, "RX INTR\n");
+	mgb_dump_all_stats(sc);
+	device_printf(sc->dev, "HEAD_WB: %d, head: %d, ring[0].own: %s, ring[0].sts: %08x\n", *(sc->rx_ring_data.head_wb), CSR_READ_REG(sc, MGB_DMA_RX_HEAD(0)), (sc->rx_ring_data.ring[0].ctl & MGB_DESC_CTL_OWN) ? "DEVICE_OWNED" : "DRIVER_OWNED", sc->rx_ring_data.ring[0].sts );
+	// callout_reset(&timer, hz, (timeout_t *)mgb_rxq_intr, sc);
+
+	return (FILTER_HANDLED);
 	return (FILTER_SCHEDULE_THREAD);
 }
 
@@ -641,17 +731,30 @@ mgb_admin_intr(void *xsc)
 
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
-	device_printf(sc->dev, "ADMIN INTR: sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
 
 	intr_sts &= intr_en;
 	/* XXX: Do test even if not UP ? */
 	if((intr_sts & MGB_INTR_STS_ANY) == 0)
+	{
+		device_printf(sc->dev, "ADMIN INTR: sts =  0x%08x, en = 0x%08x, vec_en = 0x%08x, dmac_sts = 0x%08x, dmac_en=0x%08x,\n", intr_sts, intr_en, CSR_READ_REG(sc, MGB_INTR_VEC_ENBL_SET), CSR_READ_REG(sc, MGB_DMAC_INTR_STS), CSR_READ_REG(sc, MGB_DMAC_INTR_ENBL_SET));
+
+		device_printf(sc->dev, "NOT OURS ...\n");
 		return (FILTER_SCHEDULE_THREAD);
-	if(intr_sts &  MGB_INTR_STS_TEST) {
+	}
+	if((intr_sts &  MGB_INTR_STS_TEST) != 0) {
 		sc->isr_test_flag = true;
+	//	device_printf(sc->dev, "ADMIN_INTR for TEST");
 		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
 		return (FILTER_HANDLED);
 	}
+	if((intr_sts & MGB_INTR_STS_RX(0)) == 0) {
+		device_printf(sc->dev, "ADMIN_INTR for RX[0]");
+	}
+	if((intr_sts & MGB_INTR_STS_TX(0)) == 0) {
+		device_printf(sc->dev, "ADMIN_INTR for TX[0]");
+	}
+	device_printf(sc->dev, "NOT HANDLED  ...\n");
+
 	/* TODO: shouldn't continue if suspended! */
 	return (FILTER_SCHEDULE_THREAD);
 }
@@ -673,15 +776,16 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		return ENXIO;
 	}
 	/* First vector should be admin interrupts */
-	error = iflib_irq_alloc_generic(ctx, &sc->admin_irq, 1,
+	vectorid = 1;
+	error = iflib_irq_alloc_generic(ctx, &sc->admin_irq, vectorid,
 	    IFLIB_INTR_ADMIN, mgb_admin_intr, sc, 0,
 	    "admin");
 
 	/* All other vectors will be RX/TX interrupts */
 	for (i = 0; i < scctx->isc_nrxqsets; i++) {
-		vectorid = (i + 1) + 1;
+		vectorid += 1;
 		snprintf(irq_name, sizeof(irq_name), "rxq%d", i);
-		error = iflib_irq_alloc_generic(ctx, &sc->rx_irq, (i + 1) + 1,
+		error = iflib_irq_alloc_generic(ctx, &sc->rx_irq, vectorid,
 		    IFLIB_INTR_RX, mgb_rxq_intr, sc, i, irq_name);
 		if (error) {
 			device_printf(iflib_get_dev(ctx),
@@ -691,7 +795,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 
 		/* map vector */
 
-		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(vectorid, i));
+		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(1, i));
 	}
 
 	/* Not actually mapping TX interrupts ... */
@@ -734,9 +838,10 @@ mgb_intr_enable_all(if_ctx_t ctx)
 		/* no vectors for tx */
 		dmac_enable |= MGB_DMAC_TX_INTR_ENBL(i);
 	}
-	CSR_WRITE_REG(sc, MGB_INTR_SET, intr_sts);
+	/* can use INTR_SET to force an interrupt ... */
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_sts);
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, vec_en);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, dmac_enable);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, dmac_enable);
 }
 
@@ -750,19 +855,20 @@ mgb_intr_disable_all(if_ctx_t ctx)
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_CLR, ~0);
 	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0);
 
-	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, ~0);
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_CLR, ~0);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, ~0);
 }
 
 static int
 mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 {
+	/* XXX: not called */
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, MGB_INTR_RX_VEC_STS(qid));
-	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_RX(qid));
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_RX(qid));
+
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_RX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_RX_INTR_ENBL(qid));
 	return (0);
@@ -771,11 +877,13 @@ mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 static int
 mgb_tx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 {
+	/* XXX: not called */
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TX(qid));
+
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_TX(qid));
+
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, MGB_DMAC_TX_INTR_ENBL(qid));
 	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_SET, MGB_DMAC_TX_INTR_ENBL(qid));
 	return (0);
@@ -791,8 +899,10 @@ mgb_intr_test(struct mgb_softc *sc)
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, MGB_INTR_STS_ANY);
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, MGB_INTR_STS_ANY | MGB_INTR_STS_TEST);
 	CSR_WRITE_REG(sc, MGB_INTR_SET, MGB_INTR_STS_TEST);
+	if(sc->isr_test_flag)
+		return true;
 	for (i = 0; i < MGB_TIMEOUT; i++) {
-		DELAY(20);
+		DELAY(10);
 		if(sc->isr_test_flag)
 			break;
 	}
@@ -802,38 +912,142 @@ mgb_intr_test(struct mgb_softc *sc)
 }
 
 static int
-mgb_isc_txd_encap(void * xsc , if_pkt_info_t ipi)
+mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 {
-	struct mgb_softc *sc;
+#if 0
+struct if_pkt_info {
+	bus_dma_segment_t	*ipi_segs;	/* physical addresses */
+	uint32_t		ipi_len;	/* packet length */
+	uint16_t		ipi_qsidx;	/* queue set index */
+	qidx_t			ipi_nsegs;	/* number of segments */
 
+	qidx_t			ipi_ndescs;	/* number of descriptors used by encap */
+	uint16_t		ipi_flags;	/* iflib per-packet flags */
+	qidx_t			ipi_pidx;	/* start pidx for encap */
+	qidx_t			ipi_new_pidx;	/* next available pidx post-encap */
+	/* offload handling */
+	uint8_t			ipi_ehdrlen;	/* ether header length */
+	uint8_t			ipi_ip_hlen;	/* ip header length */
+	uint8_t			ipi_tcp_hlen;	/* tcp header length */
+	uint8_t			ipi_ipproto;	/* ip protocol */
+
+	uint32_t		ipi_csum_flags;	/* packet checksum flags */
+	uint16_t		ipi_tso_segsz;	/* tso segment size */
+	uint16_t		ipi_vtag;	/* VLAN tag */
+	uint16_t		ipi_etype;	/* ether header type */
+	uint8_t			ipi_tcp_hflags;	/* tcp header flags */
+	uint8_t			ipi_mflags;	/* packet mbuf flags */
+
+	uint32_t		ipi_tcp_seq;	/* tcp seqno */
+	uint32_t		ipi_tcp_sum;	/* tcp csum */
+}
+#endif
+	struct mgb_softc *sc;
+	if_softc_ctx_t scctx;
+	struct mgb_ring_data *txr;
+	struct mgb_ring_desc *txd;
+	int i;
+
+	qidx_t pidx, nsegs;
+	bus_dma_segment_t *segs;
+
+	KASSERT(ipi->ipi_qsidx == 0, ("tried to refill head_wb queue ....\n"));
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	scctx = iflib_get_softc_ctx(sc->ctx);
+	txr = &sc->tx_ring_data;
+
+	pidx = ipi->ipi_pidx;
+	segs = ipi->ipi_segs;
+	nsegs = ipi->ipi_nsegs;
+	/* For each seg, create a descriptor */
+	for(i = 0; i < nsegs; ++i) {
+		txd = &txr->ring[pidx];
+		txd->ctl = (segs[i].ds_len & MGB_DESC_CTL_BUFLEN_MASK ) |
+		    /*
+		     * XXX: This is probably be wrong since
+		     * there might be more than one seg.
+		     * I suspect FS should be for the first packet and
+		     * LS should be for the last packet
+		     */
+		    MGB_DESC_CTL_FS | MGB_DESC_CTL_LS |
+		    /*
+		     * XXX: We don't need interrupts on completion
+		     * should probably disable them globablly as well
+		     */
+		    /* MGB_DESC_CTL_IOC | */
+		    MGB_DESC_CTL_FCS;
+		txd->addr.low = CSR_TRANSLATE_ADDR_LOW32(segs[i].ds_addr);
+		txd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(segs[i].ds_addr);
+		txd->sts = ((segs[i].ds_len << 16) & MGB_DESC_STS_BUFLEN_MASK);
+		pidx = (pidx + 1) % (scctx->isc_ntxd[ipi->ipi_qsidx]);
+	}
+	ipi->ipi_new_pidx = pidx;
 	return (0);
 }
+
 static void
-mgb_isc_txd_flush(void *xsc, uint16_t idx, qidx_t pidx)
+mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 {
 	struct mgb_softc *sc;
+	struct mgb_ring_data *txr;
 
+	KASSERT(txqid == 0, ("tried to flush head_wb queue ...."));
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	txr = &sc->tx_ring_data;
+
+	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
+	/* update tail pointer aka "ring doorbell register" */
+	if (txr->last_tail != pidx) {
+		txr->last_tail = MGB_NEXT_RING_IDX(pidx);
+		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), txr->last_tail);
+	}
+
 }
 
 static int
-mgb_isc_txd_credits_update(void *xsc, uint16_t idx, bool clear)
+mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 {
 	struct mgb_softc *sc;
+	struct mgb_ring_desc *txd;
+	struct mgb_ring_data *txr;
+	int processed = 0;
 
+	/*
+	 * XXX: From vmx ...
+	 *
+	 * > If clear is true, we need to report the number of TX command ring
+	 * > descriptors that have been processed by the device.  If clear is
+	 * > false, we just need to report whether or not at least one TX
+	 * > command ring descriptor has been processed by the device.
+	 *
+	 * This should be equivalent to tx_isr with the added option of just
+	 * checking if there is anything to be processed.
+	 */
+	KASSERT(txqid == 0, ("tried to credits_update head_wb queue ...."));
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
-	return (0);
+	txr = &sc->tx_ring_data;
+
+	device_printf(sc->dev,"%s(txqid=%d, clear=%d) w/ head_wb=%d, last_head=%d \n", __func__, txqid, clear, *(txr->head_wb), txr->last_head);
+	while(*(txr->head_wb) != txr->last_head) {
+		if (!clear)
+			return 1;
+
+		txd = &txr->ring[txr->last_head];
+		memset(txd, 0, sizeof(struct mgb_ring_desc));
+		txr->last_head++;
+		processed++;
+	}
+
+	return (processed);
 }
+
 static int
 mgb_isc_rxd_available(void *xsc, uint16_t rxqid, qidx_t idx, qidx_t budget)
 {
 	struct mgb_softc *sc;
 
 	sc = xsc;
+	KASSERT(false, ("%s\n", __func__));
 	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
 	return (0);
 }
@@ -844,6 +1058,7 @@ mgb_isc_rxd_pkt_get(void *xsc, if_rxd_info_t ri)
 	struct mgb_softc *sc;
 
 	sc = xsc;
+	KASSERT(false, ("%s\n", __func__));
 	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
 	return (0);
 }
@@ -851,19 +1066,59 @@ mgb_isc_rxd_pkt_get(void *xsc, if_rxd_info_t ri)
 static void
 mgb_isc_rxd_refill(void *xsc, if_rxd_update_t iru)
 {
+	if_softc_ctx_t scctx;
+
 	struct mgb_softc *sc;
+	struct mgb_ring_data *rdata;
+	struct mgb_ring_desc *rxd;
+
+	uint64_t *paddrs;
+	qidx_t *idxs;
+	qidx_t idx;
+	int count, len;
+
+	count = iru->iru_count;
+	len = iru->iru_buf_size;
+	idxs = iru->iru_idxs;
+	paddrs = iru->iru_paddrs;
+	KASSERT(iru->iru_qsidx == 0, ("tried to refill head_wb queue ....\n"));
 
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	scctx = iflib_get_softc_ctx(sc->ctx);
+	rdata = &sc->rx_ring_data;
+
+	device_printf(sc->dev, "Filling %d descriptors from %d to %d...\n", count, idxs[0], idxs[count - 1]);
+
+	while (count > 0) {
+		idx = idxs[--count];
+		rxd = &rdata->ring[idx];
+		/* rx_prepare_ring_element */
+		rxd->addr.low = CSR_TRANSLATE_ADDR_LOW32(paddrs[count]);
+		rxd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(paddrs[count]);
+		/* TODO: with register maps this could be down without masks etc. */
+		rxd->ctl = MGB_DESC_CTL_OWN | (len & MGB_DESC_CTL_BUFLEN_MASK);
+		rxd->sts = 0;
+	}
+#if 0
+	/* This should be done by rxd_flush (kinda like the doorbell thing for RX) */
+	sc->rx_ring_data.last_tail = idx;
+	CSR_WRITE_REG(sc, MGB_DMA_RX_TAIL(iru->iru_qsidx), sc->rx_ring_data.last_tail);
+#endif
 	return;
 }
+
 static void
 mgb_isc_rxd_flush(void *xsc, uint16_t rxqid, uint8_t flid, qidx_t pidx)
 {
 	struct mgb_softc *sc;
 
 	sc = xsc;
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+
+	KASSERT(rxqid == 0, ("tried to flush head_wb queue ...."));
+	device_printf(sc->dev, "Informing device that new tail is %d.\n", pidx);
+
+	sc->rx_ring_data.last_tail = pidx;
+	CSR_WRITE_REG(sc, MGB_DMA_RX_TAIL(rxqid), sc->rx_ring_data.last_tail);
 	return;
 }
 
@@ -890,7 +1145,6 @@ static int
 mgb_alloc_regs(struct mgb_softc *sc)
 {
 	int rid;
-
 	rid = PCIR_BAR(MGB_BAR);
 	pci_enable_busmaster(sc->dev);
 	sc->regs = bus_alloc_resource_any(sc->dev, SYS_RES_MEMORY,
@@ -914,830 +1168,6 @@ mgb_release_regs(struct mgb_softc *sc)
 	return error;
 }
 
-#if 00 /* UNUSED_MGB_FUNCTIONS_2 */
-static int
-mgb_probe(device_t dev)
-{
-	struct mgb_vendor_info *currvendor;
-	currvendor = mgb_vendor_info_array;
-
-	while(currvendor->name != NULL) {
-		if((pci_get_vendor(dev) == currvendor->vid) &&
-		   (pci_get_device(dev) == currvendor->did)) {
-			device_set_desc(dev, currvendor->name);
-			return (BUS_PROBE_DEFAULT);
-		}
-		currvendor++;
-	}
-
-	return (ENXIO); /* No such device or address */
-}
-
-static void
-mgb_intr(void * arg)
-{
-	struct mgb_softc *sc;
-	uint32_t intr_sts, intr_en;
-
-	sc = arg;
-	/* TODO: should lock this up */
-	device_printf(sc->dev, "Oh ... an interrupt occured.");
-	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
-	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
-	device_printf(sc->dev, "sts =  0x%x, en = 0x%x\n", intr_sts, intr_en);
-
-	/* turn off interrupts */
-	/* mgb_intr_disable(sc); */
-
-	intr_sts &= intr_en;
-	/* XXX: Do test even if not UP ? */
-	if((intr_sts & MGB_INTR_STS_ANY) == 0)
-		return;
-	if(intr_sts &  MGB_INTR_STS_TEST) {
-		sc->isr_test_flag = true;
-		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
-	}
-	/* TODO: shouldn't continue if suspended! */
-	if ((if_getflags(sc->ifp) & IFF_UP) == 0)
-		return;
-	/* RUNNING should also be set if up */
-	if(intr_sts &  MGB_INTR_STS_TX) {
-		mgb_txeof(sc);
-	}
-	if(intr_sts &  MGB_INTR_STS_RX) {
-		mgb_rxeof(sc);
-	}
-
-	/* re-enable interrupts */
-	/* CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_en); */
-
-}
-
-static void
-mgb_rxeof(struct mgb_softc *sc)
-{
-	struct mgb_buffer_desc *desc;
-	struct mbuf *m;
-	int head = *sc->rx_ring_data.head_wb;
-	int len;
-
-	device_printf(sc->dev, "rxeof()\n");
-
-	/* Flush ring */
-	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-
-	while (head != sc->rx_ring_data.last_head) {
-		desc = &sc->rx_buffer_data.desc[sc->rx_ring_data.last_head];
-
-		if ((desc->ring_desc->ctl & MGB_DESC_CTL_OWN) != 0)
-			break;
-
-		/*
-		 * Multi-packet are not handled yet.
-		 *
-		 * Would involve chaining the mbufs and some h/w work
-		 */
-		if ((desc->ring_desc->ctl &
-		    (MGB_DESC_CTL_FS | MGB_DESC_CTL_LS)) == 0)
-			break;
-		len = MGB_DESC_GET_FRAME_LEN(desc->ring_desc);
-
-		/* forward to OS */
-		{
-			m = desc->m;
-			/* copy length */
-			m->m_len = len - ETHER_CRC_LEN;
-			m->m_pkthdr.len = m->m_len;
-			/* copy net if */
-			m->m_pkthdr.rcvif = sc->ifp;
-			/* do checksumming ... */
-			/* add vtag ... */
-			/* unlock before running this */
-			if_input(sc->ifp, m);
-			/* relock */
-		}
-
-
-		if(mgb_newbuf(sc, sc->rx_ring_data.last_head) != 0) {
-			if_inc_counter(sc->ifp, IFCOUNTER_IQDROPS, 1);
-			mgb_discard_rxbuf(sc, sc->rx_ring_data.last_head);
-			goto next;
-		}
-
-		sc->rx_ring_data.last_tail = sc->rx_ring_data.last_head;
-		sc->rx_ring_data.last_tail =
-		    MGB_NEXT_RING_IDX(sc->rx_ring_data.last_head);
-next:
-		head = *sc->rx_ring_data.head_wb;
-	}
-
-	/* Flush ring */
-	bus_dmamap_sync(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-
-	CSR_WRITE_REG(sc, MGB_DMA_RX_TAIL(0), sc->rx_ring_data.last_tail);
-}
-
-static void
-mgb_txeof(struct mgb_softc *sc)
-{
-	/* do nothing */
-}
-
-
-static int
-mgb_attach(device_t dev)
-{
-	struct mgb_softc *sc;
-	struct ether_addr hwaddr;
-	int error;
-    	int msic, msixc;
-
-
-	sc = device_get_softc(dev);
-	sc->dev = dev;
-
-	/* Prep mutex */
-	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
-
-	pci_enable_busmaster(dev);
-	/* Allocate bus resources for using PCI bus */
-
-
-
-	sc->ifp = if_alloc(IFT_ETHER);
-	if(unlikely(sc->ifp == NULL)) {
-		device_printf(dev, "Unable to allocate ifnet structure.\n");
-		error = ENXIO;
-		goto fail;
-	}
-
-	error = mgb_dma_alloc(dev);
-	if (unlikely(error != 0)) {
-		device_printf(dev, "MGB device DMA allocations failed.\n");
-		goto fail;
-	}
-
-	mgb_get_ethaddr(sc, &ethaddr);
-	if (ETHER_IS_BROADCAST(ethaddr.octet)) {
-		ether_fakeaddr(&ethaddr);
-		/* fakeaddr says it's unicast and local ... but it lies! */
-		ethaddr.octet[0] &= ~0x1;
-		ethaddr.octet[0] |= 0x2;
-	}
-	/** XXX: Disable any packet filtering test **/
-
-	/* set perfect filtering addr */
-	CSR_WRITE_REG(sc, 0x400, 0);
-	CSR_WRITE_REG(sc, 0x404,
-		ethaddr.octet[0] |
-		(ethaddr.octet[1] << 8) |
-		(ethaddr.octet[2] << 16) |
-		(ethaddr.octet[3] << 24)
-	);
-
-	CSR_WRITE_REG(sc, 0x400,
-		ethaddr.octet[4] |
-		(ethaddr.octet[5] << 8) |
-		0x80000000
-	);
-
-	/* enable perfect filtering */
-	CSR_UPDATE_REG(sc, 0x508, 0x2);
-
-	/* disable perfect filtering */
-	CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2));
-	/* enable broadcast recieve */
-	CSR_UPDATE_REG(sc, 0x508, 0x400);
-
-
-	/** XXX: turn on link autonegotiation */
-	mgb_miibus_writereg(dev, 1, 0, 0x1200);
-
-
-	rid = 0; /* use INTx interrupts by default */
-	msic = pci_msi_count(dev);
-	msixc = pci_msix_count(dev);
-
-	/* MSIX > MSI > INTx */
-	if (msixc > 0) {
-		msixc = 1; /* Request only one line */
-		if (pci_alloc_msix(dev, &msixc) == 0) {
-			if (msixc == 1) {
-				sc->flags |= MGB_FLAG_MSIX;
-				rid = 1;
-				device_printf(dev, "Using 1 MSI-X lane.");
-			}
-			else {
-				pci_release_msi(dev);
-				msixc = 0;
-			}
-		}
-	}
-
-	if (msixc == 0 && msic > 0) {
-		msic = 1; /* Request only one line */
-		if (pci_alloc_msi(dev, &msic) == 0) {
-			if (msic == 1) {
-				sc->flags |= MGB_FLAG_MSI;
-				rid = 1;
-				device_printf(dev, "Using 1 MSI lane.");
-			}
-			else {
-				pci_release_msi(dev);
-				msic = 0;
-			}
-		}
-	}
-
-	sc->irq.res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
-	    &rid, RF_SHAREABLE | RF_ACTIVE);
-	if (unlikely(sc->irq.res == NULL)) {
-		device_printf(dev, "Unable to allocate bus resource: interrupts\n");
-		error = ENXIO;
-		goto fail;
-	}
-
-	/*
-	 * Should be sysctl tunable
-	 */
-	if_initname(sc->ifp, device_get_name(dev), device_get_unit(dev));
-	if_setdev(sc->ifp, dev);
-	if_setsoftc(sc->ifp, sc);
-
-	if_setflags(sc->ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
-	if_setinitfn(sc->ifp, mgb_init);
-	if_settransmitfn(sc->ifp, mgb_transmit_init);
-	if_setqflushfn(sc->ifp, mgb_qflush);
-	if_setioctlfn(sc->ifp, mgb_ioctl);
-	/* if_setgetcounterfn */
-
-	/* if_setsendqlen( */
-	/* if_setsendqready */
-	if_setmtu(sc->ifp, ETHERMTU);
-	if_setbaudrate(sc->ifp, IF_Mbps(1000));
-	if_setcapabilities(sc->ifp, IFCAP_HWCSUM |
-	    IFCAP_VLAN_MTU | IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWTAGGING);
-	if_setcapenable(sc->ifp, if_getcapabilities(sc->ifp));
-
-	mgb_intr_enable(sc);
-	/* Add IRQ handler */
-
-	ether_ifattach(sc->ifp, ethaddr.octet);
-
-fail:
-	if (error)
-		mgb_detach(dev);
-
-	return (error);
-}
-
-
-static int
-mgb_detach(device_t dev)
-{
-	struct mgb_softc *sc;
-	int uses_msi;
-
-	sc = device_get_softc(dev);
-	uses_msi = (sc->flags & MGB_INTR_FLAG_MASK) != MGB_FLAG_INTX;
-
-	if (device_is_attached(dev)) {
-		ether_ifdetach(sc->ifp);
-		mgb_stop(sc);
-	}
-
-	if (sc->miibus)
-		device_delete_child(dev, sc->miibus);
-	bus_generic_detach(dev);
-
-	if (sc->regs)
-		bus_release_resource(dev, SYS_RES_MEMORY,
-		    PCIR_BAR(MGB_BAR), sc->regs);
-
-	if (sc->irq.handler)
-		bus_teardown_intr(dev, sc->irq.res, sc->irq.handler);
-	if (sc->irq.res)
-		bus_release_resource(dev, SYS_RES_IRQ,
-		    uses_msi ? 1 : 0, sc->irq.res);
-	if (uses_msi)
-		pci_release_msi(dev);
-
-	if (sc->ifp)
-		if_free(sc->ifp);
-	/* DMA free */
-	mgb_dma_teardown(sc);
-	mtx_destroy(&sc->mtx);
-	kdb_enter(KDB_WHY_UNSET, "Something failed in MGB so entering debugger...");
-	return (0);
-}
-
-static void
-mgb_stop(struct mgb_softc *sc)
-{
-	struct mgb_buffer_desc *desc;
-	int i;
-
-	/* turn off interrupts */
-	mgb_intr_disable(sc);
-
-	/* stop fct and dmac */
-	/* XXX: Could potentially timeout */
-	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_STOP);
-	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_DISABLE);
-	mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_STOP);
-	mgb_fct_control(sc, MGB_FCT_TX_CTL, 0, FCT_DISABLE);
-
-	/* txeof ? */
-	/* Free floating mbufs */
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++)
-	{
-		desc = &sc->rx_buffer_data.desc[i];
-		if (desc->m != NULL) {
-			bus_dmamap_sync(sc->rx_ring_data.tag, desc->dmamap,
-			    BUS_DMASYNC_POSTREAD);
-			bus_dmamap_unload(sc->rx_ring_data.tag, desc->dmamap);
-
-			m_freem(desc->m);
-			desc->m = NULL;
-		}
-	}
-
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++)
-	{
-		desc = &sc->tx_buffer_data.desc[i];
-		if (desc->m != NULL) {
-			bus_dmamap_sync(sc->tx_ring_data.tag, desc->dmamap,
-			    BUS_DMASYNC_POSTREAD);
-			bus_dmamap_unload(sc->tx_ring_data.tag, desc->dmamap);
-
-			m_freem(desc->m);
-			desc->m = NULL;
-			if_inc_counter(sc->ifp, IFCOUNTER_OERRORS, 1);
-		}
-	}
-}
-
-
-static void
-mgb_init(void *arg)
-{
-	struct mgb_softc *sc;
-	struct mii_data *miid;
-
-	sc = (struct mgb_softc *)arg;
-	miid = device_get_softc(sc->miibus);
-	/*
-	 * TODO: Should lock this up!
-	 * (will want to run this other places so should split
-	 * functionality and locking)
-	 */
-
-	if (mgb_dma_init(sc) != 0)
-		return;
-	/* If an error occurs then stop! */
-
-	if_setdrvflagbits(sc->ifp, IFF_DRV_RUNNING, IFF_DRV_OACTIVE);
-	mii_mediachg(miid);
-}
-
-static int
-mgb_transmit_init(if_t ifp, struct mbuf *m)
-{
-	struct mgb_softc *sc;
-
-	sc = if_getsoftc(ifp);
-
-	/* XXX: ?????????
-	Don't do anything if Running and !Active
-	*/
-	for (enq = 0; !IFQ_DRV_IS_EMPTY(&ifp->if_snd) &&
-	    sc->vge_cdata.vge_tx_cnt < VGE_TX_DESC_CNT - 1; ) {
-		IFQ_DRV_DEQUEUE(&ifp->if_snd, m_head);
-		if (m_head == NULL)
-			break;
-		/*
-		 * Pack the data into the transmit ring. If we
-		 * don't have room, set the OACTIVE flag and wait
-		 * for the NIC to drain the ring.
-		 */
-		if (mgb_encap(sc, &m_head)) {
-			if (m_head == NULL)
-				break;
-			IFQ_DRV_PREPEND(&ifp->if_snd, m_head);
-			ifp->if_drv_flags |= IFF_DRV_OACTIVE;
-			break;
-		}
-
-		enq++;
-		/*
-		 * If there's a BPF listener, bounce a copy of this frame
-		 * to him.
-		 */
-		ETHER_BPF_MTAP(ifp, m_head);
-	}
-
-	if enq == 0 then done
-	otherwise
-		bus_dma_sync(tx_ring)
-		mgb_dma_tx_start()
-		start watchdog timer (usually set to 5)
-	device_printf(sc->dev, "transmit_init()\n");
-	return 0;
-}
-
-static void
-mgb_qflush(if_t ifp)
-{
-	struct mgb_softc *sc;
-
-	sc = if_getsoftc(ifp);
-	device_printf(sc->dev, "qflush()\n");
-	device_printf(
-	    sc->dev, "RX_DROPPED_FRAMES: %d\n"
-	    "RX_TOTAL_FRAMES: %d\n"
-	    "RX_BROADCAST_FRAMES: %d\n"
-	    "RX_BROADCAST_BYTES: %d\n"
-	    "err1: %d\n"
-	    "err2: %d\n"
-	    "err3: %d\n"
-	    "err4: %d\n"
-	    "err5: %d\n"
-	    "err6: %d\n",
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_DROPPED_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAME_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT1),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_BROADCAST_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FCS_ERR_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_ALIGN_ERR_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_FRAG_ERR_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_JABBER_ERR_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_UNDER_ERR_CNT),
-	    CSR_READ_REG(sc, MGB_MAC_STAT_RX_OVER_ERR_CNT)
-	);
-}
-
-static int
-mgb_ioctl(if_t ifp, u_long command, caddr_t data)
-{
-	int error = 0;
-	struct ifreq *ifr;
-	struct mgb_softc *sc;
-	struct mii_data *miid;
-
-	sc = if_getsoftc(ifp);
-	miid = device_get_softc(sc->miibus);
-	ifr  = (struct ifreq *)data;
-
-	switch (command) {
-	case SIOCSIFFLAGS:
-		if_printf(ifp, "Does nothing for SET IF FLAGS\n");
-		break;
-	case SIOCADDMULTI:
-	case SIOCDELMULTI:
-		if_printf(ifp, "Does nothing for ADD/DEL MULTI\n");
-		break;
-	case SIOCSIFMEDIA:
-	case SIOCGIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr,  &miid->mii_media, command);
-		break;
-	case SIOCSIFCAP:
-		if_printf(ifp, "Does nothing for SET IF CAPABILITIES\n");
-		break;
-	case SIOCSIFMTU:
-		/* Default may be sufficient */
-	default:
-		error = ether_ioctl(ifp, command, data);
-		break;
-	}
-
-	return (error);
-}
-
-static int
-mgb_newbuf(struct mgb_softc *sc, int idx)
-{
-	struct mbuf *m = NULL;
-	struct mgb_buffer_desc *desc;
-	bus_dma_segment_t segs[1];
-	bus_dmamap_t map;
-	int error = 0, /*i,*/ nsegs;
-
-	error = bus_dmamap_load_mbuf_sg(
-	    sc->rx_buffer_data.tag, sc->rx_buffer_data.sparemap,
-	    m, segs, &nsegs, 0);
-	if(error != 0) {
-		m_freem(m);
-		return (ENOBUFS);
-	}
-
-	KASSERT(nsegs == 1,
-	    ("%s: expected 1 DMA segment, found %d!", __func__, nsegs));
-
-	desc = &sc->rx_buffer_data.desc[idx];
-
-	if (desc->m != NULL) {
-		bus_dmamap_sync(sc->rx_buffer_data.tag, desc->dmamap,
-		    BUS_DMASYNC_POSTREAD);
-		bus_dmamap_unload(sc->rx_buffer_data.tag, desc->dmamap);
-	}
-	map = desc->dmamap;
-	desc->dmamap = sc->rx_buffer_data.sparemap;
-	sc->rx_buffer_data.sparemap = desc->dmamap;
-	bus_dmamap_sync(sc->rx_buffer_data.tag, desc->dmamap,
-	    BUS_DMASYNC_PREREAD);
-	desc->m = m;
-
-	desc->ring_desc->sts = 0;
-	/* XXX: Endian */
-	desc->ring_desc->addr.low = CSR_TRANSLATE_ADDR_LOW32(segs[0].ds_addr);
-	desc->ring_desc->addr.high = CSR_TRANSLATE_ADDR_HIGH32(segs[0].ds_addr);
-	desc->ring_desc->ctl = MGB_DESC_CTL_OWN |
-	    (segs[0].ds_len & MGB_DESC_CTL_BUFLEN_MASK);
-	return (error);
-}
-
-static void
-mgb_discard_rxbuf(struct mgb_softc *sc, int idx)
-{
-	/* Fill with zeros */
-	memset(sc->rx_buffer_data.desc[idx].ring_desc,
-	    0, sizeof(struct mgb_ring_desc));
-}
-
-static void
-mgb_ring_dmamap_bind(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
-{
-	struct mgb_ring_data *ring_data;
-
-	if (error != 0)
-		return;
-
-	KASSERT(nsegs == 1,
-	    ("%s: expected 1 DMA segment, found %d!", __func__, nsegs));
-
-	ring_data = (struct mgb_ring_data *)arg;
-	if (segs[0].ds_addr != 0) {
-		ring_data->head_wb_bus_addr = segs[0].ds_addr;
-		ring_data->ring_bus_addr = segs[0].ds_addr + sizeof(uint32_t);
-	}
-	else {
-		ring_data->head_wb_bus_addr = 0;
-		ring_data->ring_bus_addr = 0;
-	}
-}
-
-/* TODO: unused since ring_dmamap_bind does all necessary work */
-static void
-mgb_dmamap_bind(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
-{
-	bus_addr_t *addr;
-
-	if (error != 0)
-		return;
-
-	KASSERT(nsegs == 1,
-	    ("%s: expected 1 DMA segment, found %d!", __func__, nsegs));
-
-	addr = (bus_addr_t *)arg;
-	*addr = segs[0].ds_addr;
-}
-
-static int
-mgb_dma_alloc(device_t dev)
-{
-	struct mgb_softc *sc;
-	int error = 0, i;
-	struct mgb_buffer_desc *desc;
-
-	sc = device_get_softc(dev);
-	/*
-	 * `lowaddr` is BUS_SPACE_MAXADDR all the time
-	 * since this device will always be connected via PCIE
-	 */
-	error = bus_dma_tag_create(bus_get_dma_tag(dev),/* parent */
-	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADDR,		/* lowaddr */
-	    BUS_SPACE_MAXADDR,		/* highaddr */
-	    NULL, NULL,			/* filter, filterarg */
-	    BUS_SPACE_MAXSIZE,	/* maxsize */
-	    0,				/* nsegments */
-	    BUS_SPACE_MAXSIZE,	/* maxsegsize */
-	    0,				/* flags */
-	    NULL, NULL,			/* lockfunc, lockarg */
-	    &sc->dma_parent_tag);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create parent DMA tag.\n");
-		goto fail;
-	}
-
-	/* TX mbufs */
-	error = bus_dma_tag_create(sc->dma_parent_tag,/* parent */
-	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADDR,		/* lowaddr */
-	    BUS_SPACE_MAXADDR,		/* highaddr */
-	    NULL, NULL,			/* filter, filterarg */
-	    MGB_DMA_RING_INFO_SIZE,	/* maxsize */
-	    1,				/* nsegments */
-	    MGB_DMA_RING_INFO_SIZE,	/* maxsegsize */
-	    0,				/* flags */
-	    NULL, NULL,			/* lockfunc, lockarg */
-	    &sc->tx_ring_data.tag);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create TX ring DMA tag.\n");
-		goto fail;
-	}
-
-	/* RX mbufs */
-	error = bus_dma_tag_create(sc->dma_parent_tag,/* parent */
-	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADDR,		/* lowaddr */
-	    BUS_SPACE_MAXADDR,		/* highaddr */
-	    NULL, NULL,			/* filter, filterarg */
-	    MGB_DMA_RING_INFO_SIZE,	/* maxsize */
-	    1,				/* nsegments */
-	    MGB_DMA_RING_INFO_SIZE,	/* maxsegsize */
-	    0,				/* flags */
-	    NULL, NULL,			/* lockfunc, lockarg */
-	    &sc->rx_ring_data.tag);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create RX ring DMA tag.\n");
-		goto fail;
-	}
-
-	/* RX */
-	error = bus_dmamem_alloc(sc->rx_ring_data.tag,
-	    (void **)&sc->rx_ring_data.ring_info,
-	    BUS_DMA_WAITOK | BUS_DMA_ZERO | BUS_DMA_COHERENT,
-	    &sc->rx_ring_data.dmamap);
-	if (error != 0) {
-		device_printf(dev, "Couldn't allocate RX DMA ring.\n");
-		goto fail;
-	}
-	error = bus_dmamap_load(sc->rx_ring_data.tag, sc->rx_ring_data.dmamap,
-	    &sc->rx_ring_data.ring_info, MGB_DMA_RING_INFO_SIZE,
-	    mgb_ring_dmamap_bind, &sc->rx_ring_data,
-	    BUS_DMA_NOWAIT);
-	if (error != 0 || sc->rx_ring_data.ring_bus_addr == 0) {
-		device_printf(dev, "Couldn't load RX DMA ring.\n");
-		error = ENOMEM; /* in the case that ring_bus_addr = 0 */
-		goto fail;
-	}
-	sc->rx_ring_data.head_wb = MGB_HEAD_WB_PTR(sc->rx_ring_data.ring_info);
-	sc->rx_ring_data.ring = MGB_RING_PTR(sc->rx_ring_data.ring_info);
-
-	/* TX */
-	error = bus_dmamem_alloc(sc->tx_ring_data.tag,
-	     (void **)&sc->tx_ring_data.ring_info,
-	     BUS_DMA_WAITOK | BUS_DMA_ZERO | BUS_DMA_COHERENT,
-	     &sc->tx_ring_data.dmamap);
-	if (error != 0) {
-		device_printf(dev, "Couldn't allocate TX DMA ring.\n");
-		goto fail;
-	}
-	error = bus_dmamap_load(sc->tx_ring_data.tag, sc->tx_ring_data.dmamap,
-	    &sc->tx_ring_data.ring_info, MGB_DMA_RING_INFO_SIZE,
-	    mgb_ring_dmamap_bind, &sc->tx_ring_data,
-	    BUS_DMA_NOWAIT);
-	if (error != 0 || sc->tx_ring_data.ring_bus_addr == 0) {
-		device_printf(dev, "Couldn't load RX DMA ring.\n");
-		error = ENOMEM; /* in the case that ring_bus_addr = 0 */
-		goto fail;
-	}
-	/* translate pointer for the ring */
-	sc->tx_ring_data.head_wb = MGB_HEAD_WB_PTR(sc->tx_ring_data.ring_info);
-	sc->tx_ring_data.ring = MGB_RING_PTR(sc->tx_ring_data.ring_info);
-	/* TX mbufs */
-	error = bus_dma_tag_create(sc->dma_parent_tag,/* parent */
-	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADDR,		/* lowaddr */
-	    BUS_SPACE_MAXADDR,		/* highaddr */
-	    NULL, NULL,			/* filter, filterarg */
-	    MCLBYTES * MGB_DMA_MAXSEGS,	/* maxsize */
-	    MGB_DMA_MAXSEGS,		/* nsegments */
-	    MCLBYTES,			/* maxsegsize */
-	    0,				/* flags */
-	    NULL, NULL,			/* lockfunc, lockarg */
-	    &sc->tx_buffer_data.tag);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create TX ring DMA tag.\n");
-		goto fail;
-	}
-
-	/* RX mbufs */
-	error = bus_dma_tag_create(sc->dma_parent_tag,/* parent */
-	    1, 0,			/* algnmnt, boundary */
-	    BUS_SPACE_MAXADDR,		/* lowaddr */
-	    BUS_SPACE_MAXADDR,		/* highaddr */
-	    NULL, NULL,			/* filter, filterarg */
-	    MCLBYTES,			/* maxsize */
-	    1,				/* nsegments */
-	    MCLBYTES,			/* maxsegsize */
-	    0,				/* flags */
-	    NULL, NULL,			/* lockfunc, lockarg */
-	    &sc->rx_buffer_data.tag);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create RX ring DMA tag.\n");
-		goto fail;
-	}
-
-	error = bus_dmamap_create(sc->rx_buffer_data.tag,
-	    0, &sc->rx_buffer_data.sparemap);
-	if (error != 0) {
-		device_printf(dev, "Couldn't create spare RX dmamap.\n");
-		goto fail;
-	}
-
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = &sc->rx_buffer_data.desc[i];
-		desc->m = NULL;
-		desc->dmamap = NULL;
-		error = bus_dmamap_create(sc->rx_buffer_data.tag,
-		    0, &desc->dmamap);
-		if (error != 0) {
-			device_printf(dev, "Could not create RX buffer dmamap\n");
-			goto fail;
-		}
-	}
-
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = &sc->tx_buffer_data.desc[i];
-		desc->m = NULL;
-		desc->dmamap = NULL;
-		error = bus_dmamap_create(sc->tx_buffer_data.tag,
-		    0, &desc->dmamap);
-		if (error != 0) {
-			device_printf(dev, "Could not create TX buffer dmamap\n");
-			goto fail;
-		}
-	}
-fail:
-	return (error);
-}
-
-static void
-mgb_dma_teardown(struct mgb_softc *sc)
-{
-	struct mgb_buffer_desc *desc;
-	int i;
-
-	/* XXX: May have to reset values to NULL */
-
-	if (sc->dma_parent_tag != NULL) {
-		if (sc->rx_ring_data.tag != NULL) {
-			if (sc->rx_ring_data.head_wb_bus_addr != 0)
-				bus_dmamap_unload(sc->rx_ring_data.tag,
-				    sc->rx_ring_data.dmamap);
-			if (sc->rx_ring_data.ring_info != NULL)
-				bus_dmamem_free(sc->rx_ring_data.tag,
-				    sc->rx_ring_data.ring_info,
-				    sc->rx_ring_data.dmamap);
-			bus_dma_tag_destroy(sc->rx_ring_data.tag);
-		}
-		if (sc->tx_ring_data.tag != NULL) {
-			if (sc->tx_ring_data.tag != NULL) {
-				if (sc->tx_ring_data.head_wb_bus_addr != 0)
-					bus_dmamap_unload(sc->tx_ring_data.tag,
-					    sc->tx_ring_data.dmamap);
-				if (sc->tx_ring_data.ring_info != NULL)
-					bus_dmamem_free(sc->tx_ring_data.tag,
-					     sc->tx_ring_data.ring_info,
-					     sc->tx_ring_data.dmamap);
-				bus_dma_tag_destroy(sc->tx_ring_data.tag);
-			}
-		}
-
-		if (sc->rx_buffer_data.tag != NULL) {
-			if (sc->rx_buffer_data.sparemap != NULL)
-				bus_dmamap_destroy(sc->rx_buffer_data.tag,
-				    sc->rx_buffer_data.sparemap);
-			for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-				desc = &sc->rx_buffer_data.desc[i];
-
-				if (desc->dmamap != NULL)
-					bus_dmamap_destroy(sc->rx_buffer_data.tag,
-					    desc->dmamap);
-			}
-			bus_dma_tag_destroy(sc->rx_buffer_data.tag);
-		}
-
-		if (sc->tx_buffer_data.tag != NULL) {
-			for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-				desc = &sc->tx_buffer_data.desc[i];
-
-				if (desc->dmamap != NULL)
-					bus_dmamap_destroy(sc->tx_buffer_data.tag,
-					    desc->dmamap);
-			}
-			bus_dma_tag_destroy(sc->tx_buffer_data.tag);
-		}
-		bus_dma_tag_destroy(sc->dma_parent_tag);
-	}
-}
-
-#endif /* UNUSED_MGB_FUNCTIONS_2 */
-
 static int
 mgb_dma_init(struct mgb_softc *sc)
 {
@@ -1759,27 +1189,6 @@ static int
 mgb_dma_rx_ring_init(struct mgb_softc *sc)
 {
 	int ring_config, error = 0;
-#if 0
-	struct mgb_buffer_desc *desc;
-	memset(sc->rx_ring_data.ring, 0, MGB_DMA_RING_LIST_SIZE);
-
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = &sc->rx_buffer_data.desc[i];
-		desc->m = NULL;
-		desc->ring_desc = &sc->rx_ring_data.ring[i];
-		if (i == 0)
-			desc->prev = &sc->rx_buffer_data.desc[MGB_DMA_RING_SIZE -1];
-		else
-			desc->prev = &sc->rx_buffer_data.desc[i - 1];
-
-		if (mgb_newbuf(sc, i) != 0)
-			return (ENOBUFS);
-	}
-
-	bus_dmamap_sync(sc->rx_buffer_data.tag,
-	    sc->rx_ring_data.dmamap,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-#endif
 
 	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_RESET);
 
@@ -1798,12 +1207,12 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 		device_printf(sc->dev, "Invalid head wb bus addr.\n");
 		goto fail;
 	}
-	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_H(0),
+	CSR_WRITE_REG(sc, MGB_DMA_RX_HEAD_WB_H(0),
 	    CSR_TRANSLATE_ADDR_HIGH32(sc->rx_ring_data.head_wb_bus_addr));
-	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_L(0),
+	CSR_WRITE_REG(sc, MGB_DMA_RX_HEAD_WB_L(0),
 	    CSR_TRANSLATE_ADDR_LOW32(sc->rx_ring_data.head_wb_bus_addr));
 
-	/* Enable interrupt on completion and head pointer writeback */
+	/* Enable head pointer writeback */
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(0), MGB_DMA_HEAD_WB_ENBL);
 
 	ring_config = CSR_READ_REG(sc, MGB_DMA_RX_CONFIG1(0));
@@ -1816,8 +1225,6 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc)
 
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG1(0), ring_config);
 
-	sc->rx_ring_data.last_tail = MGB_DMA_RING_SIZE - 1;
-	CSR_WRITE_REG(sc, MGB_DMA_RX_TAIL(0), sc->rx_ring_data.last_tail);
 	sc->rx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_RX_HEAD(0));
 
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_RESET);
@@ -1858,24 +1265,6 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 		device_printf(sc->dev, "Failed to reset TX DMAC.\n");
 		goto fail;
 	}
-#if 0
-	struct mgb_buffer_desc *desc;
-	memset(sc->tx_ring_data.ring, 0, MGB_DMA_RING_LIST_SIZE);
-
-	for (i = 0; i < MGB_DMA_RING_SIZE; i++) {
-		desc = &sc->tx_buffer_data.desc[i];
-		desc->m = NULL;
-		desc->ring_desc = &sc->tx_ring_data.ring[i];
-		if (i == 0)
-			desc->prev = &sc->tx_buffer_data.desc[MGB_DMA_RING_SIZE -1];
-		else
-			desc->prev = &sc->tx_buffer_data.desc[i - 1];
-
-	}
-	bus_dmamap_sync(sc->tx_buffer_data.tag,
-	    sc->tx_ring_data.dmamap,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-#endif
 
 	/* write ring address */
 	if (sc->tx_ring_data.ring_bus_addr == 0) {
@@ -1890,7 +1279,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 	/* write ring size */
 	ring_config = CSR_READ_REG(sc, MGB_DMA_TX_CONFIG1(0));
 	ring_config &= ~MGB_DMA_RING_LEN_MASK;
-	ring_config |= (1 & MGB_DMA_RING_LEN_MASK);
+	ring_config |= (MGB_DMA_RING_SIZE & MGB_DMA_RING_LEN_MASK);
 	CSR_WRITE_REG(sc, MGB_DMA_TX_CONFIG1(0), ring_config);
 
 	/* Enable interrupt on completion and head pointer writeback */
@@ -1902,12 +1291,12 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc)
 		device_printf(sc->dev, "Invalid head wb bus addr.\n");
 		goto fail;
 	}
-	CSR_WRITE_REG(sc, MGB_DMA_TX_BASE_H(0),
+	CSR_WRITE_REG(sc, MGB_DMA_TX_HEAD_WB_H(0),
 	    CSR_TRANSLATE_ADDR_HIGH32(&sc->tx_ring_data.head_wb_bus_addr));
-	CSR_WRITE_REG(sc, MGB_DMA_TX_BASE_L(0),
+	CSR_WRITE_REG(sc, MGB_DMA_TX_HEAD_WB_L(0),
 	    CSR_TRANSLATE_ADDR_LOW32(sc->tx_ring_data.head_wb_bus_addr));
 
-	/* TODO: assert that MGB_DMA_TX_HEAD(0) is 0 */
+	KASSERT(CSR_READ_REG(sc, MGB_DMA_TX_HEAD(0)) == 0, ("MGB_DMA_TX_HEAD == 0"));
 	sc->tx_ring_data.last_tail = 0;
 	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(0), sc->tx_ring_data.last_tail);
 
@@ -2084,7 +1473,7 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	struct mgb_softc *sc;
 	int mii_access;
 
-	sc = device_get_softc(dev);
+	sc = iflib_get_softc(device_get_softc(dev));
 
 	if (mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY)
 	    == MGB_STS_TIMEOUT)
@@ -2098,4 +1487,38 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	if(mgb_wait_for_bits(sc, MGB_MII_ACCESS, 0, MGB_MII_BUSY) == MGB_STS_TIMEOUT)
 		return EIO;
 	return 0;
+}
+
+static void
+mgb_miibus_statchg(device_t dev)
+{
+	struct mgb_softc *sc;
+	struct mii_data *miid;
+
+	sc = iflib_get_softc(device_get_softc(dev));
+	miid = device_get_softc(sc->miibus);
+	/* Update baudrate in iflib */
+	iflib_link_state_change(sc->ctx, sc->link_state, ifmedia_baudrate(miid->mii_media_active));
+}
+
+static void
+mgb_miibus_linkchg(device_t dev)
+{
+	struct mgb_softc *sc;
+	struct mii_data *miid;
+	int link_state;
+
+	sc = iflib_get_softc(device_get_softc(dev));
+	miid = device_get_softc(sc->miibus);
+	/* XXX: copied from miibus_linkchg **/
+	if (miid->mii_media_status & IFM_AVALID) {
+		if (miid->mii_media_status & IFM_ACTIVE)
+			link_state = LINK_STATE_UP;
+		else
+			link_state = LINK_STATE_DOWN;
+	} else
+		link_state = LINK_STATE_UNKNOWN;
+	/* Update baudrate in iflib */
+	sc->link_state = link_state;
+	iflib_link_state_change(sc->ctx, link_state, if_getbaudrate(iflib_get_ifp(sc->ctx)));
 }

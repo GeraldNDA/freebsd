@@ -118,8 +118,8 @@
  *
  **/
 /* In linux driver these numbers are 50 and 65 for tx and rx .... */
-#define MGB_DMA_RING_SIZE		1024 /* in programming guide, this number is 100 */
-#define MGB_DMA_MAXSEGS			1024
+#define MGB_DMA_RING_SIZE		16 /* in programming guide, this number is 100 */
+#define MGB_DMA_MAXSEGS			32
 #define MGB_DMA_REG(reg, _channel)	((reg) | ((_channel) << 6))
 #define MGB_DMA_RING_LIST_SIZE		\
 	(sizeof(struct mgb_ring_desc) * MGB_DMA_RING_SIZE)
@@ -152,8 +152,10 @@
 #define MGB_DMA_RING_PAD_2		0x02000000
 
 #define MGB_DESC_CTL_OWN		(1 << 15)
-#define MGB_DESC_CTL_FS			(1 << 31)
+#define MGB_DESC_CTL_FCS		(1 << 17)
+#define MGB_DESC_CTL_IOC		(1 << 26)
 #define MGB_DESC_CTL_LS			(1 << 30)
+#define MGB_DESC_CTL_FS			(1 << 31)
 #define MGB_DESC_CTL_BUFLEN_MASK	(0x0000FFFF)
 #define MGB_DESC_STS_BUFLEN_MASK	(0x00003FFF)
 #define MGB_DESC_FRAME_LEN_MASK		(0x3FFF0000)
@@ -178,7 +180,7 @@
 
 /** Interrupt registers **/
 #define MGB_INTR_STS			0x780
-#define MGB_INTR_SET			0x784
+#define MGB_INTR_SET			0x784 /* This triggers a particular interrupt */
 #define MGB_INTR_ENBL_SET		0x788
 #define MGB_INTR_STS_ANY		(0x1)
 #define MGB_INTR_STS_RX(_channel)	(1 << (24 + (_channel)))
@@ -194,7 +196,7 @@
 #define MGB_INTR_VEC_OTHER_MAP		0x7A8
 #define MGB_INTR_VEC_MAP(_v, _ch)	((_v) << ((_ch) << 2))
 #define MGB_INTR_VEC_STS(_v)		(1 << (_v))
-#define MGB_INTR_RX_VEC_STS(_qid)	MGB_INTR_VEC_STS((_qid) + 2)
+#define MGB_INTR_RX_VEC_STS(_qid)	MGB_INTR_VEC_STS((_qid) + 1)
 
 
 #define MGB_STS_OK			( 0 )
@@ -291,6 +293,7 @@ struct mgb_softc {
 	bool 				 isr_test_flag;
 
 	device_t			 miibus;
+	int				 link_state;
 
 	int				 if_flags;
 	int				 ethaddr;
