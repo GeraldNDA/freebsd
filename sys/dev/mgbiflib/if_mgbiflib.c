@@ -1213,7 +1213,8 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 	CSR_WRITE_REG(sc, MGB_DMA_TX_HEAD_WB_L(channel),
 	    CSR_TRANSLATE_ADDR_LOW32(sc->tx_ring_data.head_wb_bus_addr));
 
-	KASSERT(CSR_READ_REG(sc, MGB_DMA_TX_HEAD(channel)) == 0, ("MGB_DMA_TX_HEAD != 0"));
+	sc->tx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_TX_HEAD(channel));
+	KASSERT(sc->tx_ring_data.last_head == 0, ("MGB_DMA_TX_HEAD != 0"));
 	sc->tx_ring_data.last_tail = 0;
 	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(channel), sc->tx_ring_data.last_tail);
 
