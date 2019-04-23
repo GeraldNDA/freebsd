@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
+#include <sys/endian.h>
 
 /* Needed for debugging */
 #include <sys/kdb.h>
@@ -87,8 +88,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/mgbiflib/if_mgbiflib.h>
 
 static pci_vendor_info_t mgb_vendor_info_array[] = {
-	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7430_DEVICE_ID, "Microchip LAN7430 PCIe Gigabit Ethernet Controller"),
-	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7431_DEVICE_ID, "Microchip LAN7431 PCIe Gigabit Ethernet Controller"),
+	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7430_DEVICE_ID,
+	    "Microchip LAN7430 PCIe Gigabit Ethernet Controller"),
+	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7431_DEVICE_ID,
+	    "Microchip LAN7431 PCIe Gigabit Ethernet Controller"),
 	PVID_END
 };
 
@@ -177,7 +180,6 @@ static device_method_t mgb_methods[] = {
 	DEVMETHOD(device_suspend,	iflib_device_suspend),
 	DEVMETHOD(device_resume,	iflib_device_resume),
 
-
 	/* MII Interface */
 	DEVMETHOD(miibus_readreg,	mgb_miibus_readreg),
 	DEVMETHOD(miibus_writereg,	mgb_miibus_writereg),
@@ -194,7 +196,7 @@ static driver_t mgb_driver = {
 devclass_t mgb_devclass;
 DRIVER_MODULE(mgb, pci, mgb_driver, mgb_devclass, NULL, NULL);
 IFLIB_PNP_INFO(pci, mgb, mgb_vendor_info_array);
-MODULE_VERSION(mgb, 2);
+MODULE_VERSION(mgb, 1);
 
 #if 0 /* MIIBUS_DEBUG */
 /* If MIIBUS debug stuff is in attach then order matters. Use below instead. */
@@ -324,7 +326,7 @@ mgb_attach_pre(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
 	if_softc_ctx_t scctx;
-	int error, phyaddr;
+	int error, phyaddr, rid;
 	struct ether_addr hwaddr;
 
 	struct mii_data *miid;
@@ -407,7 +409,7 @@ mgb_attach_pre(if_ctx_t ctx)
 
 	scctx->isc_msix_bar = pci_msix_table_bar(sc->dev);
 	/** Setup PBA BAR **/
-	int rid = pci_msix_pba_bar(sc->dev);
+	rid = pci_msix_pba_bar(sc->dev);
 	if (rid != scctx->isc_msix_bar) {
 		sc->pba = bus_alloc_resource_any(sc->dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
 		if (unlikely(sc->pba == NULL)) {
@@ -486,7 +488,7 @@ mgb_media_change(if_t ifp)
 	struct mii_softc *miisc;
 	struct mgb_softc *sc;
 	if_ctx_t ctx;
-	int needs_reset = 0;
+	int needs_reset;
 
 	ctx = if_getsoftc(ifp);
 	sc = iflib_get_softc(ctx);
@@ -597,10 +599,6 @@ mgb_init(if_ctx_t ctx)
 	CSR_UPDATE_REG(sc, 0x508, 0x400);
 	CSR_UPDATE_REG(sc, 0x508, 0x200);
 	CSR_UPDATE_REG(sc, 0x508, 0x100);
-
-
-	/* XXX: turn on link autonegotiation */
-	mgb_miibus_writereg(sc->dev, 1, 0, 0x1200);
 	/* callout_reset(&timer, hz / 2, (timeout_t *)mgb_rxq_intr, sc); */
 
 	error = mii_mediachg(miid);
@@ -610,13 +608,13 @@ mgb_init(if_ctx_t ctx)
 static void
 mgb_dump_all_stats(struct mgb_softc *sc)
 {
+	int i;
 	int first_stat = 0x1200;
 	int last_stat = 0x12FC;
 
-	for(int i = first_stat; i <= last_stat; i += 4)
+	for(i = first_stat; i <= last_stat; i += 4)
 		if (CSR_READ_REG(sc, i) != 0)
 			device_printf(sc->dev, "0x%04x: 0x%08x\n", i, CSR_READ_REG(sc, i));
-
 }
 
 static void
@@ -743,7 +741,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		}
 
 		/* map vector */
-		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(vectorid, i));
+		CSR_UPDATE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(vectorid, i));
 	}
 
 	/* Not actually mapping TX interrupts ... */
@@ -858,7 +856,7 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 {
 	struct mgb_softc *sc;
 	if_softc_ctx_t scctx;
-	struct mgb_ring_data *txr;
+	struct mgb_ring_data *rdata;
 	struct mgb_ring_desc *txd;
 	int i;
 
@@ -868,15 +866,15 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 	KASSERT(ipi->ipi_qsidx == 0, ("tried to refill head_wb queue ....\n"));
 	sc = xsc;
 	scctx = iflib_get_softc_ctx(sc->ctx);
-	txr = &sc->tx_ring_data;
+	rdata = &sc->tx_ring_data;
 
 	pidx = ipi->ipi_pidx;
 	segs = ipi->ipi_segs;
 	nsegs = ipi->ipi_nsegs;
 	/* For each seg, create a descriptor */
 	for(i = 0; i < nsegs; ++i) {
-		txd = &txr->ring[pidx];
-		txd->ctl = (segs[i].ds_len & MGB_DESC_CTL_BUFLEN_MASK ) |
+		txd = &rdata->ring[pidx];
+		txd->ctl = htole32((segs[i].ds_len & MGB_DESC_CTL_BUFLEN_MASK ) |
 		    /*
 		     * XXX: This is probably be wrong since
 		     * there might be more than one seg.
@@ -889,10 +887,10 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 		     * should probably disable them globablly as well
 		     */
 		    /* MGB_DESC_CTL_IOC | */
-		    MGB_DESC_CTL_FCS;
-		txd->addr.low = CSR_TRANSLATE_ADDR_LOW32(segs[i].ds_addr);
-		txd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(segs[i].ds_addr);
-		txd->sts = ((segs[i].ds_len << 16) & MGB_DESC_FRAME_LEN_MASK);
+		    MGB_DESC_CTL_FCS);
+		txd->addr.low = htole32(CSR_TRANSLATE_ADDR_LOW32(segs[i].ds_addr));
+		txd->addr.high = htole32(CSR_TRANSLATE_ADDR_HIGH32(segs[i].ds_addr));
+		txd->sts = htole32((segs[i].ds_len << 16) & MGB_DESC_FRAME_LEN_MASK);
 		pidx = (pidx + 1) % (scctx->isc_ntxd[ipi->ipi_qsidx]);
 	}
 	ipi->ipi_new_pidx = pidx;
@@ -903,17 +901,17 @@ static void
 mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 {
 	struct mgb_softc *sc;
-	struct mgb_ring_data *txr;
+	struct mgb_ring_data *rdata;
 
 	KASSERT(txqid == 0, ("tried to flush head_wb queue ...."));
 	sc = xsc;
-	txr = &sc->tx_ring_data;
+	rdata = &sc->tx_ring_data;
 
 	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
 	/* update tail pointer aka "ring doorbell register" */
-	if (txr->last_tail != pidx) {
-		txr->last_tail = MGB_NEXT_RING_IDX(pidx);
-		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), txr->last_tail);
+	if (rdata->last_tail != pidx) {
+		rdata->last_tail = MGB_NEXT_RING_IDX(pidx);
+		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), rdata->last_tail);
 	}
 
 }
@@ -923,7 +921,7 @@ mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 {
 	struct mgb_softc *sc;
 	struct mgb_ring_desc *txd;
-	struct mgb_ring_data *txr;
+	struct mgb_ring_data *rdata;
 	int processed = 0;
 
 	/*
@@ -940,16 +938,16 @@ mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 	 */
 	KASSERT(txqid == 0, ("tried to credits_update head_wb queue ...."));
 	sc = xsc;
-	txr = &sc->tx_ring_data;
+	rdata = &sc->tx_ring_data;
 
-	device_printf(sc->dev,"%s(txqid=%d, clear=%d) w/ head_wb=%d, last_head=%d \n", __func__, txqid, clear, *(txr->head_wb), txr->last_head);
-	while(*(txr->head_wb) != txr->last_head) {
+	device_printf(sc->dev,"%s(txqid=%d, clear=%d) w/ head_wb=%d, last_head=%d \n", __func__, txqid, clear, *(rdata->head_wb), rdata->last_head);
+	while(*(rdata->head_wb) != rdata->last_head) {
 		if (!clear)
 			return 1;
 
-		txd = &txr->ring[txr->last_head];
+		txd = &rdata->ring[rdata->last_head];
 		memset(txd, 0, sizeof(struct mgb_ring_desc));
-		txr->last_head++;
+		rdata->last_head++;
 		processed++;
 	}
 
@@ -960,11 +958,25 @@ static int
 mgb_isc_rxd_available(void *xsc, uint16_t rxqid, qidx_t idx, qidx_t budget)
 {
 	struct mgb_softc *sc;
+	if_softc_ctx_t scctx;
+	struct mgb_ring_data *rdata;
+	int avail = 0;
 
 	sc = xsc;
 	KASSERT(false, ("%s\n", __func__));
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
-	return (0);
+	device_printf(sc->dev, "Call to untested txrx func => '%s'\n", __func__);
+	KASSERT(rxqid == 0, ("tried to check availability in head_wb queue ....\n"));
+
+	rdata = &sc->rx_ring_data;
+	scctx = iflib_get_softc_ctx(sc->ctx);
+	for (; idx != *(rdata->head_wb);
+	    idx = (idx + 1) % scctx->isc_nrxd[rxqid]) {
+		avail++;
+		/* Could verify desc is device owned here */
+		if (avail == budget)
+			break;
+	}
+	return (avail);
 }
 
 static int
@@ -1008,10 +1020,10 @@ mgb_isc_rxd_refill(void *xsc, if_rxd_update_t iru)
 		idx = idxs[--count];
 		rxd = &rdata->ring[idx];
 		/* rx_prepare_ring_element */
-		rxd->addr.low = CSR_TRANSLATE_ADDR_LOW32(paddrs[count]);
-		rxd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(paddrs[count]);
+		rxd->addr.low = htole32(CSR_TRANSLATE_ADDR_LOW32(paddrs[count]));
+		rxd->addr.high = htole32(CSR_TRANSLATE_ADDR_HIGH32(paddrs[count]));
 		/* TODO: with register maps this could be done without masks etc. */
-		rxd->ctl = MGB_DESC_CTL_OWN | (len & MGB_DESC_CTL_BUFLEN_MASK);
+		rxd->ctl = htole32(MGB_DESC_CTL_OWN | (len & MGB_DESC_CTL_BUFLEN_MASK));
 		rxd->sts = 0;
 	}
 	return;
@@ -1406,6 +1418,7 @@ mgb_miibus_writereg(device_t dev, int phy, int reg, int data)
 	return 0;
 }
 
+/* XXX: Should probably lock these up */
 static void
 mgb_miibus_statchg(device_t dev)
 {
@@ -1415,7 +1428,8 @@ mgb_miibus_statchg(device_t dev)
 	sc = iflib_get_softc(device_get_softc(dev));
 	miid = device_get_softc(sc->miibus);
 	/* Update baudrate in iflib */
-	iflib_link_state_change(sc->ctx, sc->link_state, ifmedia_baudrate(miid->mii_media_active));
+	sc->baudrate = ifmedia_baudrate(miid->mii_media_active);
+	iflib_link_state_change(sc->ctx, sc->link_state, sc->baudrate);
 }
 
 static void
@@ -1436,5 +1450,5 @@ mgb_miibus_linkchg(device_t dev)
 	} else
 		link_state = LINK_STATE_UNKNOWN;
 	sc->link_state = link_state;
-	iflib_link_state_change(sc->ctx, link_state, if_getbaudrate(iflib_get_ifp(sc->ctx)));
+	iflib_link_state_change(sc->ctx, sc->link_state, sc->baudrate);
 }

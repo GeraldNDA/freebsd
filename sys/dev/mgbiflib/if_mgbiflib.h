@@ -297,6 +297,7 @@ struct mgb_softc {
 
 	device_t			 miibus;
 	int				 link_state;
+	int				 baudrate;
 
 	int				 if_flags;
 	int				 ethaddr;
