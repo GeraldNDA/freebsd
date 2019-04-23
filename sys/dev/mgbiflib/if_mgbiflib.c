@@ -57,7 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/kernel.h>
 
-
 /* Resource Alloc (work with PCI bus) */
 #include <sys/bus.h>
 #include <sys/rman.h>
@@ -140,24 +139,25 @@ static void 				mgb_media_status(if_t, struct ifmediareq *);
 
 /* Helper/Test functions */
 static int				mgb_test_bar(struct mgb_softc *);
-
 static int				mgb_alloc_regs(struct mgb_softc *);
 static int				mgb_release_regs(struct mgb_softc *);
 
-static void				mgb_get_ethaddr(struct mgb_softc *, struct ether_addr *);
-static int				mgb_dma_init(struct mgb_softc *);
+static void				mgb_get_ethaddr(struct mgb_softc *,
+					    struct ether_addr *);
 
 static int				mgb_wait_for_bits(struct mgb_softc *,
 					    int, int, int);
-
+/* H/W init, reset and teardown helpers */
 static int				mgb_hw_init(struct mgb_softc *);
 static int				mgb_hw_reset(struct mgb_softc *);
 static int				mgb_mac_init(struct mgb_softc *);
 static int				mgb_dmac_reset(struct mgb_softc *);
 static int				mgb_phy_reset(struct mgb_softc *);
 
+static int				mgb_dma_init(struct mgb_softc *);
 static int 				mgb_dma_tx_ring_init(struct mgb_softc *, int);
 static int 				mgb_dma_rx_ring_init(struct mgb_softc *, int);
+
 static int				mgb_dmac_control(struct mgb_softc *, int, int,
 					    enum mgb_dmac_cmd);
 static int				mgb_fct_control(struct mgb_softc *, int, int,
@@ -1105,29 +1105,31 @@ fail:
 static int
 mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 {
+	struct mgb_ring_data *rdata;
 	int ring_config, error = 0;
 
+	rdata = &sc->rx_ring_data;
 	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_RESET);
 
 	/* write ring address */
-	if (sc->rx_ring_data.ring_bus_addr == 0) {
+	if (rdata->ring_bus_addr == 0) {
 		device_printf(sc->dev, "Invalid ring bus addr.\n");
 		goto fail;
 	}
 	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_H(channel),
-	    CSR_TRANSLATE_ADDR_HIGH32(sc->rx_ring_data.ring_bus_addr));
+	    CSR_TRANSLATE_ADDR_HIGH32(rdata->ring_bus_addr));
 	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_L(channel),
-	    CSR_TRANSLATE_ADDR_LOW32(sc->rx_ring_data.ring_bus_addr));
+	    CSR_TRANSLATE_ADDR_LOW32(rdata->ring_bus_addr));
 
 	/* write head pointer writeback address */
-	if (sc->rx_ring_data.head_wb_bus_addr == 0) {
+	if (rdata->head_wb_bus_addr == 0) {
 		device_printf(sc->dev, "Invalid head wb bus addr.\n");
 		goto fail;
 	}
 	CSR_WRITE_REG(sc, MGB_DMA_RX_HEAD_WB_H(channel),
-	    CSR_TRANSLATE_ADDR_HIGH32(sc->rx_ring_data.head_wb_bus_addr));
+	    CSR_TRANSLATE_ADDR_HIGH32(rdata->head_wb_bus_addr));
 	CSR_WRITE_REG(sc, MGB_DMA_RX_HEAD_WB_L(channel),
-	    CSR_TRANSLATE_ADDR_LOW32(sc->rx_ring_data.head_wb_bus_addr));
+	    CSR_TRANSLATE_ADDR_LOW32(rdata->head_wb_bus_addr));
 
 	/* Enable head pointer writeback */
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(channel), MGB_DMA_HEAD_WB_ENBL);
@@ -1142,7 +1144,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG1(channel), ring_config);
 
-	sc->rx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_RX_HEAD(channel));
+	rdata->last_head = CSR_READ_REG(sc, MGB_DMA_RX_HEAD(channel));
 
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, channel, FCT_RESET);
 	if (error != 0) {
@@ -1164,14 +1166,15 @@ fail:
 static int
 mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 {
+	struct mgb_ring_data *rdata;
 	int ring_config, error = 0;
 
+	rdata = &sc->tx_ring_data;
 	error = mgb_fct_control(sc, MGB_FCT_TX_CTL, channel, FCT_RESET);
 	if (error != 0) {
 		device_printf(sc->dev, "Failed to reset TX FCT.\n");
 		goto fail;
 	}
-
 	error = mgb_fct_control(sc, MGB_FCT_TX_CTL, channel, FCT_ENABLE);
 	if (error != 0) {
 		device_printf(sc->dev, "Failed to enable TX FCT.\n");
@@ -1184,14 +1187,14 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 	}
 
 	/* write ring address */
-	if (sc->tx_ring_data.ring_bus_addr == 0) {
+	if (rdata->ring_bus_addr == 0) {
 		device_printf(sc->dev, "Invalid ring bus addr.\n");
 		goto fail;
 	}
 	CSR_WRITE_REG(sc, MGB_DMA_TX_BASE_H(channel),
-	    CSR_TRANSLATE_ADDR_HIGH32(&sc->tx_ring_data.ring_bus_addr));
+	    CSR_TRANSLATE_ADDR_HIGH32(rdata->ring_bus_addr));
 	CSR_WRITE_REG(sc, MGB_DMA_TX_BASE_L(channel),
-	    CSR_TRANSLATE_ADDR_LOW32(sc->tx_ring_data.ring_bus_addr));
+	    CSR_TRANSLATE_ADDR_LOW32(rdata->ring_bus_addr));
 
 	/* write ring size */
 	ring_config = CSR_READ_REG(sc, MGB_DMA_TX_CONFIG1(channel));
@@ -1204,19 +1207,19 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 	CSR_WRITE_REG(sc, MGB_DMA_TX_CONFIG0(channel), ring_config);
 
 	/* write head pointer writeback address */
-	if (sc->tx_ring_data.head_wb_bus_addr == 0) {
+	if (rdata->head_wb_bus_addr == 0) {
 		device_printf(sc->dev, "Invalid head wb bus addr.\n");
 		goto fail;
 	}
 	CSR_WRITE_REG(sc, MGB_DMA_TX_HEAD_WB_H(channel),
-	    CSR_TRANSLATE_ADDR_HIGH32(&sc->tx_ring_data.head_wb_bus_addr));
+	    CSR_TRANSLATE_ADDR_HIGH32(rdata->head_wb_bus_addr));
 	CSR_WRITE_REG(sc, MGB_DMA_TX_HEAD_WB_L(channel),
-	    CSR_TRANSLATE_ADDR_LOW32(sc->tx_ring_data.head_wb_bus_addr));
+	    CSR_TRANSLATE_ADDR_LOW32(rdata->head_wb_bus_addr));
 
-	sc->tx_ring_data.last_head = CSR_READ_REG(sc, MGB_DMA_TX_HEAD(channel));
-	KASSERT(sc->tx_ring_data.last_head == 0, ("MGB_DMA_TX_HEAD != 0"));
-	sc->tx_ring_data.last_tail = 0;
-	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(channel), sc->tx_ring_data.last_tail);
+	rdata->last_head = CSR_READ_REG(sc, MGB_DMA_TX_HEAD(channel));
+	KASSERT(rdata->last_head == 0, ("MGB_DMA_TX_HEAD != 0"));
+	rdata->last_tail = 0;
+	CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(channel), rdata->last_tail);
 
 	error = mgb_dmac_control(sc, MGB_DMAC_TX_START, channel, DMAC_START);
 	if (error != 0)
@@ -1230,7 +1233,7 @@ mgb_dmac_control(struct mgb_softc *sc, int start, int channel, enum mgb_dmac_cmd
 {
 	int error = 0;
 	switch (cmd) {
-case DMAC_RESET:
+	case DMAC_RESET:
 		CSR_WRITE_REG(sc, MGB_DMAC_CMD,
 		    MGB_DMAC_CMD_RESET(start, channel));
 		error = mgb_wait_for_bits(sc, MGB_DMAC_CMD,
