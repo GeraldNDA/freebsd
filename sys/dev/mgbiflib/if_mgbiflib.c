@@ -301,7 +301,7 @@ struct if_shared_ctx mgb_sctx_init = {
 	.isc_nrxd_max = {MGB_DMA_RING_SIZE, 1},
 	.isc_nrxd_default = {MGB_DMA_RING_SIZE, 1},
 
-	.isc_nfl = 1, /* XXX: one free list for each receive command queue */
+	.isc_nfl = 2, /* XXX: one free list for each receive command queue */
 #if 0 /* UNUSED_CTX */
 
 	.isc_tso_maxsize = VMXNET3_TSO_MAXSIZE + sizeof(struct ether_vlan_header),
@@ -556,6 +556,7 @@ mgb_rx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 	sc = iflib_get_softc(ctx);
 	rdata = &sc->rx_ring_data; /* there should only be one ring set */
 	for (q = 0; q < nrxqsets; q++) {
+		KASSERT(nrxqs == 2, ("nrxqs = %d", nrxqs));
 		/* Ring */
 		rdata->ring =
 		    (struct mgb_ring_desc *) vaddrs[q * nrxqs + 0];
@@ -1095,7 +1096,7 @@ mgb_dma_init(struct mgb_softc *sc)
 			goto fail;
 
 	for (ch = 0; ch < scctx->isc_nrxqsets; ch++)
-		if ((error = mgb_dma_rx_ring_init(sc, ch)) != 0)
+		if ((error = mgb_dma_tx_ring_init(sc, ch)) != 0)
 			goto fail;
 
 fail:
