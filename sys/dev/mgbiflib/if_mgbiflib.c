@@ -1129,9 +1129,9 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 	    CSR_TRANSLATE_ADDR_LOW32(sc->rx_ring_data.head_wb_bus_addr));
 
 	/* Enable head pointer writeback */
-	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(0), MGB_DMA_HEAD_WB_ENBL);
+	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(channel), MGB_DMA_HEAD_WB_ENBL);
 
-	ring_config = CSR_READ_REG(sc, MGB_DMA_RX_CONFIG1(0));
+	ring_config = CSR_READ_REG(sc, MGB_DMA_RX_CONFIG1(channel));
 	/*  ring size */
 	ring_config &= ~MGB_DMA_RING_LEN_MASK;
 	ring_config |= (MGB_DMA_RING_SIZE & MGB_DMA_RING_LEN_MASK);
