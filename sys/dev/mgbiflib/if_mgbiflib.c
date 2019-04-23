@@ -254,13 +254,13 @@ static driver_t mgb_iflib_driver = {
 };
 
 struct if_txrx mgb_txrx  = {
-	.ift_txd_encap = mgb_isc_txd_encap, /* unimplemented */
-	.ift_txd_flush = mgb_isc_txd_flush, /* unimplemented */
-	.ift_txd_credits_update = mgb_isc_txd_credits_update, /* unimplemented */
+	.ift_txd_encap = mgb_isc_txd_encap,
+	.ift_txd_flush = mgb_isc_txd_flush,
+	.ift_txd_credits_update = mgb_isc_txd_credits_update,
 	.ift_rxd_available = mgb_isc_rxd_available, /* unimplemented */
 	.ift_rxd_pkt_get = mgb_isc_rxd_pkt_get, /* unimplemented */
-	.ift_rxd_refill = mgb_isc_rxd_refill, /* unimplemented */
-	.ift_rxd_flush = mgb_isc_rxd_flush, /* unimplemented */
+	.ift_rxd_refill = mgb_isc_rxd_refill,
+	.ift_rxd_flush = mgb_isc_rxd_flush,
 
 	.ift_legacy_intr = mgb_legacy_intr
 };
@@ -274,7 +274,8 @@ struct if_shared_ctx mgb_sctx_init = {
 	 * It'll think we're using legacy interrupts !!!
 	 */
 	.isc_admin_intrcnt = 1,
-	.isc_flags =  IFLIB_GEN_MAC, /*| IFLIB_HAS_RXCQ | IFLIB_HAS_TXCQ, */
+	/* IFLIB_GEN_MAC is only for pseudo-devices */
+	/* .isc_flags = IFLIB_HAS_RXCQ | IFLIB_HAS_TXCQ, */
 
 	.isc_vendor_info = mgb_vendor_info_array,
 	.isc_driver_version = "1",
@@ -286,7 +287,7 @@ struct if_shared_ctx mgb_sctx_init = {
 	/* .isc_tx_nsegments = MGB_DMA_MAXSEGS, */
 	.isc_tx_maxsegsize = MCLBYTES,
 
-	.isc_ntxd_min = {1, 1}, // Will want to make this bigger
+	.isc_ntxd_min = {1, 1}, /* Will want to make this bigger */
 	.isc_ntxd_max = {MGB_DMA_RING_SIZE, 1},
 	.isc_ntxd_default = {MGB_DMA_RING_SIZE, 1},
 
@@ -296,7 +297,7 @@ struct if_shared_ctx mgb_sctx_init = {
 	.isc_rx_nsegments = 1,
 	.isc_rx_maxsegsize = MCLBYTES,
 
-	.isc_nrxd_min = {1, 1}, // Will want to make this bigger
+	.isc_nrxd_min = {1, 1}, /* Will want to make this bigger */
 	.isc_nrxd_max = {MGB_DMA_RING_SIZE, 1},
 	.isc_nrxd_default = {MGB_DMA_RING_SIZE, 1},
 
@@ -337,7 +338,7 @@ mgb_attach_pre(if_ctx_t ctx)
 
 	/* IFLIB required setup */
 	scctx->isc_txrx = &mgb_txrx;
-	scctx->isc_tx_nsegments =  MGB_DMA_RING_SIZE; // MGB_DMA_MAXSEGS;
+	scctx->isc_tx_nsegments =  MGB_DMA_RING_SIZE; /* MGB_DMA_MAXSEGS; */
 	/* Ring desc queues */
 	scctx->isc_txqsizes[0] = sizeof(struct mgb_ring_desc) * scctx->isc_ntxd[0];
 	scctx->isc_rxqsizes[0] = sizeof(struct mgb_ring_desc) * scctx->isc_nrxd[0];
@@ -601,9 +602,9 @@ mgb_init(if_ctx_t ctx)
 	CSR_UPDATE_REG(sc, 0x508, 0x100);
 
 
-	/** XXX: turn on link autonegotiation */
+	/* XXX: turn on link autonegotiation */
 	mgb_miibus_writereg(sc->dev, 1, 0, 0x1200);
-	// callout_reset(&timer, hz / 2, (timeout_t *)mgb_rxq_intr, sc);
+	/* callout_reset(&timer, hz / 2, (timeout_t *)mgb_rxq_intr, sc); */
 
 	error = mii_mediachg(miid);
 	KASSERT(!error, ("mii_mediachg returned: %d", error));
