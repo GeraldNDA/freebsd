@@ -301,7 +301,7 @@ struct if_shared_ctx mgb_sctx_init = {
 	.isc_nrxd_max = {MGB_DMA_RING_SIZE, 1},
 	.isc_nrxd_default = {MGB_DMA_RING_SIZE, 1},
 
-	.isc_nfl = 2, /* XXX: one free list for each receive command queue */
+	.isc_nfl = 1, /* XXX: one free list for each queue */
 #if 0 /* UNUSED_CTX */
 
 	.isc_tso_maxsize = VMXNET3_TSO_MAXSIZE + sizeof(struct ether_vlan_header),
@@ -323,7 +323,6 @@ static int
 mgb_attach_pre(if_ctx_t ctx)
 {
 	struct mgb_softc *sc;
-	if_t ifp;
 	if_softc_ctx_t scctx;
 	int error, phyaddr;
 	struct ether_addr hwaddr;
@@ -333,7 +332,6 @@ mgb_attach_pre(if_ctx_t ctx)
 	sc = iflib_get_softc(ctx);
 	sc->ctx = ctx;
 	sc->dev = iflib_get_dev(ctx);
-	ifp = iflib_get_ifp(ctx);
 	scctx = iflib_get_softc_ctx(ctx);
 
 	/* IFLIB required setup */
@@ -368,8 +366,6 @@ mgb_attach_pre(if_ctx_t ctx)
 	scctx->isc_capabilities |= IFCAP_LRO | IFCAP_VLAN_HWFILTER;
 #endif
 
-	pci_enable_busmaster(sc->dev);
-
 	/* get the BAR */
 	error = mgb_alloc_regs(sc);
 	if(unlikely(error != 0)) {
@@ -398,7 +394,7 @@ mgb_attach_pre(if_ctx_t ctx)
 		break;
 	}
 	/* would be nice if it called iflib media methods ... diving into ifp struct is messy ... */
-	error = mii_attach(sc->dev, &sc->miibus, ifp,
+	error = mii_attach(sc->dev, &sc->miibus, iflib_get_ifp(ctx),
 	    mgb_media_change, mgb_media_status,
 	    BMSR_DEFCAPMASK, phyaddr, MII_OFFSET_ANY, MIIF_DOPAUSE);
 	if(unlikely(error != 0)) {
@@ -500,7 +496,7 @@ mgb_media_change(if_t ifp)
 
 	needs_reset = mii_mediachg(miid);
 	if (needs_reset != 0)
-		(iflib_get_ifp(ctx))->if_init(ctx);
+		ifp->if_init(ctx);
 	return (needs_reset);
 }
 
@@ -720,7 +716,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 
 	if(!(scctx->isc_nrxqsets == scctx->isc_ntxqsets == 1))
 	{
-		device_printf(iflib_get_dev(ctx), "Assumption that rxqsets and txqsets == 1 is false.\n");
+		device_printf(sc->dev, "Assumption that rxqsets and txqsets == 1 is false.\n");
 		return ENXIO;
 	}
 	/* First vector should be admin interrupts */
@@ -729,7 +725,7 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 	    IFLIB_INTR_ADMIN, mgb_admin_intr, sc, 0,
 	    "admin");
 	if (error) {
-		device_printf(iflib_get_dev(ctx),
+		device_printf(sc->dev,
 		    "Failed to register admin interrupt handler\n");
 		return (error);
 	}
@@ -741,14 +737,13 @@ mgb_msix_intr_assign(if_ctx_t ctx, int msix)
 		error = iflib_irq_alloc_generic(ctx, &sc->rx_irq, vectorid,
 		    IFLIB_INTR_RX, mgb_rxq_intr, sc, i, irq_name);
 		if (error) {
-			device_printf(iflib_get_dev(ctx),
+			device_printf(sc->dev,
 			    "Failed to register rxq %d interrupt handler\n", i);
 			return (error);
 		}
 
 		/* map vector */
-
-		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(1, i));
+		CSR_WRITE_REG(sc, MGB_INTR_VEC_RX_MAP, MGB_INTR_VEC_MAP(vectorid, i));
 	}
 
 	/* Not actually mapping TX interrupts ... */
@@ -798,12 +793,12 @@ mgb_intr_disable_all(if_ctx_t ctx)
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
-	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, ~0);
-	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_CLR, ~0);
-	CSR_WRITE_REG(sc, MGB_INTR_STS, ~0);
+	CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, UINT32_MAX);
+	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_CLR, UINT32_MAX);
+	CSR_WRITE_REG(sc, MGB_INTR_STS, UINT32_MAX);
 
-	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_CLR, ~0);
-	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, ~0);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_ENBL_CLR, UINT32_MAX);
+	CSR_WRITE_REG(sc, MGB_DMAC_INTR_STS, UINT32_MAX);
 }
 
 static int
@@ -897,7 +892,7 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 		    MGB_DESC_CTL_FCS;
 		txd->addr.low = CSR_TRANSLATE_ADDR_LOW32(segs[i].ds_addr);
 		txd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(segs[i].ds_addr);
-		txd->sts = ((segs[i].ds_len << 16) & MGB_DESC_STS_BUFLEN_MASK);
+		txd->sts = ((segs[i].ds_len << 16) & MGB_DESC_FRAME_LEN_MASK);
 		pidx = (pidx + 1) % (scctx->isc_ntxd[ipi->ipi_qsidx]);
 	}
 	ipi->ipi_new_pidx = pidx;
@@ -1015,7 +1010,7 @@ mgb_isc_rxd_refill(void *xsc, if_rxd_update_t iru)
 		/* rx_prepare_ring_element */
 		rxd->addr.low = CSR_TRANSLATE_ADDR_LOW32(paddrs[count]);
 		rxd->addr.high = CSR_TRANSLATE_ADDR_HIGH32(paddrs[count]);
-		/* TODO: with register maps this could be down without masks etc. */
+		/* TODO: with register maps this could be done without masks etc. */
 		rxd->ctl = MGB_DESC_CTL_OWN | (len & MGB_DESC_CTL_BUFLEN_MASK);
 		rxd->sts = 0;
 	}
