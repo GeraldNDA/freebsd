@@ -745,13 +745,13 @@ mgb_admin_intr(void *xsc)
 		CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TEST);
 		return (FILTER_HANDLED);
 	}
-	if ((intr_sts & MGB_INTR_STS_RX(0)) == 0)
+	if ((intr_sts & MGB_INTR_STS_RX_ANY) != 0)
 	{
-		device_printf(sc->dev, "ADMIN_INTR for RX[0]");
+		device_printf(sc->dev, "ADMIN_INTR for RX[0-4]");
 	}
-	if ((intr_sts & MGB_INTR_STS_TX(0)) == 0)
+	if ((intr_sts & MGB_INTR_STS_TX_ANY) != 0)
 	{
-		device_printf(sc->dev, "ADMIN_INTR for TX[0]");
+		device_printf(sc->dev, "ADMIN_INTR for TX[0-4]");
 	}
 	device_printf(sc->dev, "NOT HANDLED  ...\n");
 
@@ -831,11 +831,14 @@ mgb_intr_enable_all(if_ctx_t ctx)
 		dmac_enable |= MGB_DMAC_RX_INTR_ENBL(i);
 		vec_en |= MGB_INTR_RX_VEC_STS(i);
 	}
+#if 0
+	/* XXX: TX interrupts aren't needed ... */
 	for (i = 0; i < scctx->isc_ntxqsets; i++) {
 		intr_sts |= MGB_INTR_STS_TX(i);
 		/* no vectors for tx */
 		dmac_enable |= MGB_DMAC_TX_INTR_ENBL(i);
 	}
+#endif
 	/* can use INTR_SET to force an interrupt ... */
 	CSR_WRITE_REG(sc, MGB_INTR_ENBL_SET, intr_sts);
 	CSR_WRITE_REG(sc, MGB_INTR_VEC_ENBL_SET, vec_en);
@@ -930,22 +933,17 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 	segs = ipi->ipi_segs;
 	nsegs = ipi->ipi_nsegs;
 	/* For each seg, create a descriptor */
-	for(i = 0; i < nsegs; ++i) {
+	device_printf(sc->dev,"%s(ipi.nsegs=%d, ipi.pidx=%d)\n", __func__, nsegs, pidx);
+	for (i = 0; i < nsegs; ++i) {
 		KASSERT(nsegs == 1, ("Multisegment packet !!!!!\n"));
 		txd = &rdata->ring[pidx];
 		txd->ctl = htole32((segs[i].ds_len & MGB_DESC_CTL_BUFLEN_MASK ) |
 		    /*
-		     * XXX: This is probably be wrong since
-		     * there might be more than one seg.
+		     * XXX: This will be wrong in the multipacket case
 		     * I suspect FS should be for the first packet and
 		     * LS should be for the last packet
 		     */
-		    MGB_DESC_CTL_FS | MGB_DESC_CTL_LS |
-		    /*
-		     * XXX: We don't need interrupts on completion
-		     * should probably disable them globablly as well
-		     */
-		    MGB_DESC_CTL_IOC |
+		    MGB_TX_DESC_CTL_FS | MGB_TX_DESC_CTL_LS |
 		    MGB_DESC_CTL_FCS);
 		txd->addr.low = htole32(CSR_TRANSLATE_ADDR_LOW32(segs[i].ds_addr));
 		txd->addr.high = htole32(CSR_TRANSLATE_ADDR_HIGH32(segs[i].ds_addr));
@@ -967,15 +965,11 @@ mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 	rdata = &sc->tx_ring_data;
 
 	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
-	if (pidx == 0 || pidx == 1)
-		mgb_dump_all_stats(sc);
 	/* update tail pointer aka "ring doorbell register" */
 	if (rdata->last_tail != pidx) {
 		rdata->last_tail = MGB_NEXT_RING_IDX(pidx);
 		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), rdata->last_tail);
 	}
-	if (pidx == 13 || pidx == 0)
-		mgb_dump_all_stats(sc);
 
 }
 
@@ -1010,7 +1004,7 @@ mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 
 		txd = &rdata->ring[rdata->last_head];
 		memset(txd, 0, sizeof(struct mgb_ring_desc));
-		rdata->last_head++;
+		rdata->last_head = MGB_NEXT_RING_IDX(rdata->last_head);
 		processed++;
 	}
 
@@ -1187,6 +1181,8 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 		device_printf(sc->dev, "Invalid ring bus addr.\n");
 		goto fail;
 	}
+	device_printf(sc->dev, "VIRTUAL RX_RING=%p RX_HEAD_WB=%p\n", rdata->ring, rdata->head_wb);
+	device_printf(sc->dev, "PHYSICAL RX_RING=%016lx RX_HEAD_WB=%016lx\n", rdata->ring_bus_addr, rdata->head_wb_bus_addr);
 	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_H(channel),
 	    CSR_TRANSLATE_ADDR_HIGH32(rdata->ring_bus_addr));
 	CSR_WRITE_REG(sc, MGB_DMA_RX_BASE_L(channel),
@@ -1259,6 +1255,8 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 		goto fail;
 	}
 
+	device_printf(sc->dev, "VIRTUAL TX_RING=%p TX_HEAD_WB=%p\n", rdata->ring, rdata->head_wb);
+	device_printf(sc->dev, "PHYSICAL TX_RING=%016lx TX_HEAD_WB=%016lx\n", rdata->ring_bus_addr, rdata->head_wb_bus_addr);
 	/* write ring address */
 	if (rdata->ring_bus_addr == 0) {
 		device_printf(sc->dev, "Invalid ring bus addr.\n");

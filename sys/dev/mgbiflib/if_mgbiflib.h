@@ -158,8 +158,10 @@
 #define MGB_DESC_CTL_OWN		(1 << 15)
 #define MGB_DESC_CTL_FCS		(1 << 17)
 #define MGB_DESC_CTL_IOC		(1 << 26)
-#define MGB_DESC_CTL_LS			(1 << 30)
-#define MGB_DESC_CTL_FS			(1 << 31)
+#define MGB_TX_DESC_CTL_LS		(1 << 28)
+#define MGB_TX_DESC_CTL_FS		(1 << 29)
+#define MGB_RX_DESC_CTL_LS		(1 << 30)
+#define MGB_RX_DESC_CTL_FS		(1 << 31)
 #define MGB_DESC_CTL_BUFLEN_MASK	(0x0000FFFF)
 #define MGB_DESC_STS_BUFLEN_MASK	(0x00003FFF)
 #define MGB_DESC_FRAME_LEN_MASK		(0x3FFF0000)
@@ -187,7 +189,9 @@
 #define MGB_INTR_SET			0x784 /* This triggers a particular interrupt */
 #define MGB_INTR_ENBL_SET		0x788
 #define MGB_INTR_STS_ANY		(0x1)
+#define MGB_INTR_STS_RX_ANY		0x0F000000
 #define MGB_INTR_STS_RX(_channel)	(1 << (24 + (_channel)))
+#define MGB_INTR_STS_TX_ANY		0x000F0000
 #define MGB_INTR_STS_TX(_channel)	(1 << (16 + (_channel)))
 #define MGB_INTR_STS_TEST		(1 << 9)
 #define MGB_INTR_ENBL_CLR		0x78C
