@@ -971,7 +971,7 @@ mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
 
 	/* update tail pointer aka "ring doorbell register" */
-	if (rdata->last_tail != pidx && pidx - rdata->last_tail > 7) {
+	if (rdata->last_tail != pidx) {
 		rdata->last_tail = MGB_NEXT_RING_IDX(pidx);
 		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), rdata->last_tail);
 	}
