@@ -455,7 +455,6 @@ mgb_attach_post(if_ctx_t ctx)
 	device_printf(sc->dev, "Interrupt test: %s\n",
 	    (mgb_intr_test(sc) ? "PASS" : "FAIL"));
 
-	mgb_dma_init(sc);
 
 	/* callout_init(&timer, 1); */
 	return (0);
@@ -597,11 +596,7 @@ mgb_init(if_ctx_t ctx)
 	miid = device_get_softc(sc->miibus);
 	device_printf(sc->dev, "running init ...\n");
 
-	/* XXX: Maybe should clear the FIFO's? */
-	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_ENABLE);
-	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_START);
-	mgb_fct_control(sc, MGB_FCT_TX_CTL, 0, FCT_ENABLE);
-	mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_START);
+	mgb_dma_init(sc);
 
 	/* XXX: Turn off perfect filtering, turn on (broad|multi|uni)cast rx */
 	CSR_WRITE_REG(sc, 0x508, CSR_READ_REG(sc, 0x508) & (~0x2)); /* Disable Perfect Filtering */
@@ -626,7 +621,6 @@ mgb_dump_all_stats(struct mgb_softc *sc)
 		if (CSR_READ_REG(sc, i) != 0)
 			device_printf(sc->dev, "0x%04x: 0x%08x\n", i, CSR_READ_REG(sc, i));
 	char *stat_names[] = {
-#if 0
 		"MAC_ERR_STS ",
 		"FCT_INT_STS ",
 		"DMAC_CFG ",
@@ -643,12 +637,12 @@ mgb_dump_all_stats(struct mgb_softc *sc)
 		"INT_VEC_MAP0 ",
 		"INT_VEC_MAP1 ",
 		"INT_VEC_MAP2 ",
-#endif
+		"TX_HEAD0",
+		"TX_TAIL0",
 		"DMAC_TX_ERR_STS0 ",
 		NULL
 	};
 	int stats[] = {
-#if 0
 		0x114,
 		0xA0,
 		0xC00,
@@ -665,14 +659,25 @@ mgb_dump_all_stats(struct mgb_softc *sc)
 		0x7A0,
 		0x7A4,
 		0x780,
-#endif
+		0xD58,
+		0xD5C,
 		0xD60,
 		0x0
 	};
 	i = 0;
 	printf("==============================\n");
 	while(stats[i++])
-		device_printf(sc->dev, "%s at offset 0x%04x = %08x\n", stat_names[i - 1], stats[i - 1], CSR_READ_REG(sc, stats[i - 1]));
+		device_printf(sc->dev, "%s at offset 0x%04x = 0x%08x\n", stat_names[i - 1], stats[i - 1], CSR_READ_REG(sc, stats[i - 1]));
+	printf("==== TX RING DESCS ====\n");
+	for (i = 0; i < MGB_DMA_RING_SIZE; i++)
+		device_printf(sc->dev, "ring[%d].data0=0x%08x\n"
+		    "ring[%d].data1=0x%08x\n"
+		    "ring[%d].data2=0x%08x\n"
+		    "ring[%d].data3=0x%08x\n",
+		    i, sc->tx_ring_data.ring[i].ctl,
+		    i, sc->tx_ring_data.ring[i].addr.low,
+		    i, sc->tx_ring_data.ring[i].addr.high,
+		    i, sc->tx_ring_data.ring[i].sts);
 }
 
 static void
@@ -683,10 +688,6 @@ mgb_stop(if_ctx_t ctx)
 	sc = iflib_get_softc(ctx);
 
 	/* callout_stop(&timer); */
-
-	device_printf(sc->dev, "== START of Non-zero stats ==\n");
-	mgb_dump_all_stats(sc);
-	device_printf(sc->dev, "== END of non-zero stats ==\n");
 
 	/* XXX: Could potentially timeout */
 	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_STOP);
@@ -752,6 +753,8 @@ mgb_admin_intr(void *xsc)
 	if ((intr_sts & MGB_INTR_STS_TX_ANY) != 0)
 	{
 		device_printf(sc->dev, "ADMIN_INTR for TX[0-4]");
+		iflib_tx_intr_deferred(sc->ctx, 0);
+		return (FILTER_HANDLED);
 	}
 	device_printf(sc->dev, "NOT HANDLED  ...\n");
 
@@ -863,7 +866,7 @@ mgb_intr_disable_all(if_ctx_t ctx)
 static int
 mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 {
-	/* XXX: not called */
+	/* called after successful rx isr */
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
@@ -878,7 +881,7 @@ mgb_rx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 static int
 mgb_tx_queue_intr_enable(if_ctx_t ctx, uint16_t qid)
 {
-	/* XXX: not called */
+	/* XXX: not called (since tx interrupts not used) */
 	struct mgb_softc *sc;
 
 	sc = iflib_get_softc(ctx);
@@ -934,6 +937,7 @@ mgb_isc_txd_encap(void *xsc , if_pkt_info_t ipi)
 	nsegs = ipi->ipi_nsegs;
 	/* For each seg, create a descriptor */
 	device_printf(sc->dev,"%s(ipi.nsegs=%d, ipi.pidx=%d)\n", __func__, nsegs, pidx);
+
 	for (i = 0; i < nsegs; ++i) {
 		KASSERT(nsegs == 1, ("Multisegment packet !!!!!\n"));
 		txd = &rdata->ring[pidx];
@@ -965,12 +969,12 @@ mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 	rdata = &sc->tx_ring_data;
 
 	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
+
 	/* update tail pointer aka "ring doorbell register" */
-	if (rdata->last_tail != pidx) {
+	if (rdata->last_tail != pidx && pidx - rdata->last_tail > 7) {
 		rdata->last_tail = MGB_NEXT_RING_IDX(pidx);
 		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), rdata->last_tail);
 	}
-
 }
 
 static int
@@ -998,6 +1002,22 @@ mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 	rdata = &sc->tx_ring_data;
 
 	device_printf(sc->dev,"%s(txqid=%d, clear=%d) w/ head_wb=%d, last_head=%d \n", __func__, txqid, clear, *(rdata->head_wb), rdata->last_head);
+	if (CSR_READ_REG(sc, 0xD60) || (CSR_READ_REG(sc, MGB_DMA_TX_HEAD(0)) != rdata->last_head )) {
+		device_printf(sc->dev, "==== DUMP_TX_DMA_RAM (err=%08x) ====\n", CSR_READ_REG(sc, 0xD60));
+		int i;
+		CSR_WRITE_REG(sc, 0x24, 0xF); // DP_SEL & TX_RAM_0
+		for(i = 0; i < 128; i++) {
+			CSR_WRITE_REG(sc, 0x2C, i); // DP_ADDR
+
+			CSR_WRITE_REG(sc, 0x28, 0); // DP_CMD
+
+			while ((CSR_READ_REG(sc, 0x24) & 0x80000000) == 0) // DP_SEL & READY
+				DELAY(1000);
+
+			device_printf(sc->dev, "DMAC_TX_RAM_0[%u]=%08x\n", i, CSR_READ_REG(sc, 0x30)); // DP_DATA
+		}
+	}
+
 	while(*(rdata->head_wb) != rdata->last_head) {
 		if (!clear)
 			return 1;
@@ -1040,10 +1060,31 @@ static int
 mgb_isc_rxd_pkt_get(void *xsc, if_rxd_info_t ri)
 {
 	struct mgb_softc *sc;
+	struct mgb_ring_data *rdata;
+	struct mgb_ring_desc *rxd;
 
 	sc = xsc;
 	KASSERT(false, ("%s\n", __func__));
-	device_printf(sc->dev, "Call to unimplemented txrx func => '%s'\n", __func__);
+	device_printf(sc->dev, "Call to untested txrx func => '%s'\n", __func__);
+
+	rdata = &sc->rx_ring_data;
+	while (*(rdata->head_wb) != rdata->last_head) {
+		rxd = &rdata->ring[rdata->last_head];
+		if ((rxd->ctl & MGB_DESC_CTL_OWN) != 0)
+			return EINVAL;
+		if ((rxd->ctl & MGB_RX_DESC_CTL_FS) != 0)
+			return EINVAL;
+		if ((rxd->ctl & MGB_RX_DESC_CTL_LS) != 0)
+			return EINVAL;
+		ri->iri_frags[0].irf_flid = 0;
+		ri->iri_frags[0].irf_idx = rdata->last_head;
+		ri->iri_frags[0].irf_len = MGB_DESC_GET_FRAME_LEN(rxd);
+
+		rdata->last_head = MGB_NEXT_RING_IDX(rdata->last_head);
+		break;
+	}
+	ri->iri_nfrags = 1;
+
 	return (0);
 }
 
@@ -1163,6 +1204,24 @@ mgb_dma_init(struct mgb_softc *sc)
 		if ((error = mgb_dma_tx_ring_init(sc, ch)) != 0)
 			goto fail;
 
+	CSR_UPDATE_REG(sc, 0x104, 1);
+	CSR_UPDATE_REG(sc, 0x108, 1);
+
+
+	device_printf(sc->dev, "==== DUMP_TX_DMA_RAM ====\n");
+	int i;
+	CSR_WRITE_REG(sc, 0x24, 0xF); // DP_SEL & TX_RAM_0
+	for(i = 0; i < 128; i++) {
+		CSR_WRITE_REG(sc, 0x2C, i); // DP_ADDR
+
+		CSR_WRITE_REG(sc, 0x28, 0); // DP_CMD
+
+		while ((CSR_READ_REG(sc, 0x24) & 0x80000000) == 0) // DP_SEL & READY
+			DELAY(1000);
+
+		device_printf(sc->dev, "DMAC_TX_RAM_0[%u]=%08x\n", i, CSR_READ_REG(sc, 0x30)); // DP_DATA
+	}
+
 fail:
 	return error;
 }
@@ -1175,6 +1234,7 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 
 	rdata = &sc->rx_ring_data;
 	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_RESET);
+	KASSERT(MGB_DMAC_STATE_IS_INITIAL(sc, MGB_DMAC_RX_START, channel), ("Trying to init channels when not in init state\n"));
 
 	/* write ring address */
 	if (rdata->ring_bus_addr == 0) {
@@ -1199,8 +1259,6 @@ mgb_dma_rx_ring_init(struct mgb_softc *sc, int channel)
 	    CSR_TRANSLATE_ADDR_LOW32(rdata->head_wb_bus_addr));
 
 	/* Enable head pointer writeback */
-	KASSERT(CSR_READ_REG(sc, MGB_DMAC_CMD) == 0,
-	    ("Trying to write RX_CONFIG when not in initial state.\n"));
 	CSR_WRITE_REG(sc, MGB_DMA_RX_CONFIG0(channel), MGB_DMA_HEAD_WB_ENBL);
 
 	ring_config = CSR_READ_REG(sc, MGB_DMA_RX_CONFIG1(channel));
@@ -1254,6 +1312,7 @@ mgb_dma_tx_ring_init(struct mgb_softc *sc, int channel)
 		device_printf(sc->dev, "Failed to reset TX DMAC.\n");
 		goto fail;
 	}
+	KASSERT(MGB_DMAC_STATE_IS_INITIAL(sc, MGB_DMAC_TX_START, channel), ("Trying to init channels in not init state\n"));
 
 	device_printf(sc->dev, "VIRTUAL TX_RING=%p TX_HEAD_WB=%p\n", rdata->ring, rdata->head_wb);
 	device_printf(sc->dev, "PHYSICAL TX_RING=%016lx TX_HEAD_WB=%016lx\n", rdata->ring_bus_addr, rdata->head_wb_bus_addr);

@@ -92,19 +92,25 @@
 
 /** DMA Controller **/
 #define MGB_DMAC_CMD			0xC0C
-#define MGB_DMAC_RESET			0x80000000
+#define MGB_DMAC_RESET			(1 << 31)
 #define MGB_DMAC_TX_START		16
 #define MGB_DMAC_RX_START		0
 #define MGB_DMAC_CMD_VAL(s, o, ch)	(1 << ((s) + (o) + (ch)))
 #define MGB_DMAC_CMD_RESET(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 8, _ch)
 #define MGB_DMAC_CMD_START(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 4, _ch)
-#define MGB_DMAC_CMD_STOP(_s, _ch)	MGB_DMAC_CMD_VAL(_s, 0, _ch)
+#define MGB_DMAC_CMD_STOP( _s, _ch)	MGB_DMAC_CMD_VAL(_s, 0, _ch)
 #define MGB_DMAC_STATE(_start, _stop)	\
 	(((_start) ? 2 : 0) | ((_stop) ? 1 : 0))
 #define MGB_DMAC_STATE_INITIAL		MGB_DMAC_STATE(0, 0)
 #define MGB_DMAC_STATE_STARTED		MGB_DMAC_STATE(1, 0)
 #define MGB_DMAC_STATE_STOP_PENDING	MGB_DMAC_STATE(1, 1)
 #define MGB_DMAC_STATE_STOPPED		MGB_DMAC_STATE(0, 1)
+#define MGB_DMAC_CMD_STATE(sc, _s, _ch)				\
+	(MGB_DMAC_STATE(					\
+	    CSR_READ_REG(sc, MGB_DMAC_CMD) & MGB_DMAC_CMD_START(_s, _ch),	\
+	    CSR_READ_REG(sc, MGB_DMAC_CMD) & MGB_DMAC_CMD_STOP(_s, _ch)))
+#define MGB_DMAC_STATE_IS_INITIAL(sc, _s, _ch)			\
+	(MGB_DMAC_CMD_STATE(sc, _s, _ch) == MGB_DMAC_STATE_INITIAL)
 
 #define MGB_DMAC_INTR_STS		0xC10
 #define MGB_DMAC_INTR_ENBL_SET		0xC14
