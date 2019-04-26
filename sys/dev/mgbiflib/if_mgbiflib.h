@@ -82,6 +82,14 @@
 #define MGB_MAC_STAT_RX_BROADCAST_CNT1	0x1220
 #define MGB_MAC_STAT_RX_BROADCAST_CNT	0x122C
 #define MGB_MAC_STAT_RX_FRAME_CNT	0x1254
+/* etc. */
+
+/** Recieve Filtering Engine **/
+#define MGB_RFE_CTL			0x508
+#define MGB_RFE_ALLOW_BROADCAST		(1 << 10)
+#define MGB_RFE_ALLOW_MULTICAST		(1 << 9)
+#define MGB_RFE_ALLOW_UNICAST		(1 << 8)
+#define MGB_RFE_ALLOW_PERFECT_FILTER	(1 << 1)
 
 /** PHY Reset (via power management control) **/
 #define MGB_PMT_CTL			0x14 /** Power Management Control Register **/
@@ -161,7 +169,7 @@
 #define MGB_DMA_RING_LEN_MASK		0xFFFF
 #define MGB_DMA_IOC_ENBL		0x10000000
 #define MGB_DMA_HEAD_WB_LS_ENBL		0x20000000
-#define MGB_DMA_HEAD_WB_ENBL		0x20
+#define MGB_DMA_HEAD_WB_ENBL		(1 << 5)
 #define MGB_DMA_RING_PAD_MASK		0x03000000
 #define MGB_DMA_RING_PAD_0		0x00000000
 #define MGB_DMA_RING_PAD_2		0x02000000
@@ -236,6 +244,9 @@
 #define CSR_WRITE_REG(sc, reg, val)	\
 	bus_write_4((sc)->regs, reg, val)
 
+#define CSR_CLEAR_REG(sc, reg, bits)	\
+	CSR_WRITE_REG(sc, reg, CSR_READ_REG(sc, reg) & ~(bits))
+
 #define CSR_UPDATE_REG(sc, reg, val)	\
 	CSR_WRITE_REG(sc, reg, CSR_READ_REG(sc, reg) | (val))
 
@@ -267,14 +278,17 @@ struct mgb_ring_desc_addr {
 	uint32_t				high;
 } __packed;
 
+/* TODO: With descriptor bit information
+ * this could be done without masks etc.
+ * (using bitwise structs like vmx,
+ * would have to separate rx/tx ring desc
+ * definitions)
+ */
 struct mgb_ring_desc {
 	uint32_t				ctl; /* data0 */
 	struct mgb_ring_desc_addr		addr; /* data(1|2) */
 	uint32_t				sts; /* data3 */
 } __packed;
-
-/* TODO: Combine RX and TX rings into a single tag/map */
-/* TODO: WoL */
 
 #if 0
 struct mgb_ring_info {
