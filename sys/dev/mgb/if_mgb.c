@@ -103,7 +103,7 @@ __FBSDID("$FreeBSD$");
 #include "miibus_if.h"
 
 /* Registers and structures for MGB driver */
-#include <dev/mgbiflib/if_mgbiflib.h>
+#include <dev/mgb/if_mgb.h>
 
 static pci_vendor_info_t mgb_vendor_info_array[] = {
 	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7430_DEVICE_ID,
