@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
  * A number of features supported by LAN743X device are not yet implemented in
  * this driver:
  *
+ * - Multi-buffer (chained) packets
  * - Multiple (up to 4) RX queues support
  *   - Just needs to remove asserts and malloc multiple `rx_ring_data`
  *     structs based on ncpus.
