@@ -454,7 +454,7 @@ mgb_attach_pre(if_ctx_t ctx)
 	if (unlikely(ETHER_IS_BROADCAST(hwaddr.octet) ||
 	    ETHER_IS_MULTICAST(hwaddr.octet) ||
 	    ETHER_IS_ZERO(hwaddr.octet)))
-		ether_gen_addr(&hwaddr);
+		ether_gen_addr(iflib_get_ifp(ctx), &hwaddr);
 
 	/*
 	 * XXX: if it was generated the linux driver
