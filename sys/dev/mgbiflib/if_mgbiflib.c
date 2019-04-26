@@ -469,6 +469,12 @@ mgb_detach(if_ctx_t ctx)
 	/* callout_drain(&timer); */
 
 	sc = iflib_get_softc(ctx);
+	/* Stop MAC */
+	/* TODO: Should do a general hw_teardown */
+	CSR_WRITE_REG(sc, MGB_MAC_RX, CSR_READ_REG(sc, MGB_MAC_RX) & ~MGB_MAC_ENBL);
+	CSR_WRITE_REG(sc, MGB_MAC_TX, CSR_READ_REG(sc, MGB_MAC_TX) & ~MGB_MAC_ENBL);
+	mgb_wait_for_bits(sc, MGB_MAC_RX, MGB_MAC_DSBL, 0);
+	mgb_wait_for_bits(sc, MGB_MAC_TX, MGB_MAC_DSBL, 0);
 	/* Release IRQs */
 	iflib_irq_free(ctx, &sc->rx_irq);
 	iflib_irq_free(ctx, &sc->admin_irq);
@@ -690,6 +696,7 @@ mgb_stop(if_ctx_t ctx)
 	/* callout_stop(&timer); */
 
 	/* XXX: Could potentially timeout */
+	/* XXX: should loop of txqsets and rxqsets */
 	mgb_dmac_control(sc, MGB_DMAC_RX_START, 0, DMAC_STOP);
 	mgb_fct_control(sc, MGB_FCT_RX_CTL, 0, FCT_DISABLE);
 	mgb_dmac_control(sc, MGB_DMAC_TX_START, 0, DMAC_STOP);
@@ -713,25 +720,25 @@ mgb_rxq_intr(void *xsc)
 	struct mgb_softc *sc;
 
 	sc = xsc;
-
-	device_printf(sc->dev, "RX INTR\n");
-	mgb_dump_all_stats(sc);
-	/* callout_reset(&timer, hz, (timeout_t *)mgb_rxq_intr, sc); */
-
-	return (FILTER_HANDLED);
+	device_printf(sc->dev, "CALLED RXQ INTR!!!\n");
+	/* What do? */
+	return (FILTER_SCHEDULE_THREAD);
 }
 
 static int
 mgb_admin_intr(void *xsc)
 {
 	struct mgb_softc *sc;
+	if_softc_ctx_t scctx;
 	uint32_t intr_sts, intr_en;
+	int qidx;
 
 	sc = xsc;
-
+	scctx = iflib_get_softc_ctx(sc->ctx);
 
 	intr_sts = CSR_READ_REG(sc, MGB_INTR_STS);
 	intr_en = CSR_READ_REG(sc, MGB_INTR_ENBL_SET);
+	device_printf(sc->dev, "=== GENERIC ADMIN INTR ===\n");
 
 	intr_sts &= intr_en;
 	if ((intr_sts & MGB_INTR_STS_ANY) == 0)
@@ -748,12 +755,28 @@ mgb_admin_intr(void *xsc)
 	}
 	if ((intr_sts & MGB_INTR_STS_RX_ANY) != 0)
 	{
-		device_printf(sc->dev, "ADMIN_INTR for RX[0-4]");
+		device_printf(sc->dev, "=== GENERIC RX INTR ===\n");
+		for (qidx = 0; qidx < scctx->isc_nrxqsets; qidx++) {
+			if ((intr_sts & MGB_INTR_STS_RX(qidx))){
+				device_printf(sc->dev, "=== SPECIFIC RX[%d] INTR ===\n", qidx);
+				/* clear interrupts for this queue */
+				CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, MGB_INTR_STS_RX(qidx));
+				CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_RX(qidx));
+				iflib_rx_intr_deferred(sc->ctx, qidx);
+			}
+		}
+		return (FILTER_HANDLED);
 	}
 	if ((intr_sts & MGB_INTR_STS_TX_ANY) != 0)
 	{
-		device_printf(sc->dev, "ADMIN_INTR for TX[0-4]");
-		iflib_tx_intr_deferred(sc->ctx, 0);
+		for (qidx = 0; qidx < scctx->isc_ntxqsets; qidx++) {
+			if ((intr_sts & MGB_INTR_STS_RX(qidx))) {
+				/* clear the interrupt sts and run handler */
+				CSR_WRITE_REG(sc, MGB_INTR_ENBL_CLR, MGB_INTR_STS_TX(qidx));
+				CSR_WRITE_REG(sc, MGB_INTR_STS, MGB_INTR_STS_TX(qidx));
+				iflib_tx_intr_deferred(sc->ctx, qidx);
+			}
+		}
 		return (FILTER_HANDLED);
 	}
 	device_printf(sc->dev, "NOT HANDLED  ...\n");
@@ -970,9 +993,8 @@ mgb_isc_txd_flush(void *xsc, uint16_t txqid, qidx_t pidx)
 
 	device_printf(sc->dev,"%s(txqid=%d, pidx=%d)\n", __func__, txqid, pidx);
 
-	/* update tail pointer aka "ring doorbell register" */
 	if (rdata->last_tail != pidx) {
-		rdata->last_tail = MGB_NEXT_RING_IDX(pidx);
+		rdata->last_tail = pidx;
 		CSR_WRITE_REG(sc, MGB_DMA_TX_TAIL(txqid), rdata->last_tail);
 	}
 }
@@ -1002,7 +1024,7 @@ mgb_isc_txd_credits_update(void *xsc, uint16_t txqid, bool clear)
 	rdata = &sc->tx_ring_data;
 
 	device_printf(sc->dev,"%s(txqid=%d, clear=%d) w/ head_wb=%d, last_head=%d \n", __func__, txqid, clear, *(rdata->head_wb), rdata->last_head);
-	if (CSR_READ_REG(sc, 0xD60) || (CSR_READ_REG(sc, MGB_DMA_TX_HEAD(0)) != rdata->last_head )) {
+	if (CSR_READ_REG(sc, 0xD60)) {
 		device_printf(sc->dev, "==== DUMP_TX_DMA_RAM (err=%08x) ====\n", CSR_READ_REG(sc, 0xD60));
 		int i;
 		CSR_WRITE_REG(sc, 0x24, 0xF); // DP_SEL & TX_RAM_0
@@ -1203,10 +1225,6 @@ mgb_dma_init(struct mgb_softc *sc)
 	for (ch = 0; ch < scctx->isc_nrxqsets; ch++)
 		if ((error = mgb_dma_tx_ring_init(sc, ch)) != 0)
 			goto fail;
-
-	CSR_UPDATE_REG(sc, 0x104, 1);
-	CSR_UPDATE_REG(sc, 0x108, 1);
-
 
 	device_printf(sc->dev, "==== DUMP_TX_DMA_RAM ====\n");
 	int i;
@@ -1447,6 +1465,8 @@ mgb_mac_init(struct mgb_softc *sc)
 	 */
 	CSR_UPDATE_REG(sc, MGB_MAC_CR,
 	    MGB_MAC_ADD_ENBL | MGB_MAC_ASD_ENBL);
+	CSR_UPDATE_REG(sc, MGB_MAC_TX, MGB_MAC_ENBL);
+	CSR_UPDATE_REG(sc, MGB_MAC_RX, MGB_MAC_ENBL);
 	return MGB_STS_OK;
 }
 

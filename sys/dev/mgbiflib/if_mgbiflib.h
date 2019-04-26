@@ -62,6 +62,11 @@
 #define MGB_MAC_ADDR_BASE_L		0x11C /** MAC address lower 4 bytes (read) register **/
 #define MGB_MAC_ADDR_BASE_H		0x118 /** MAC address upper 2 bytes (read) register **/
 
+#define MGB_MAC_TX			0x0104
+#define MGB_MAC_RX			0x0108
+#define MGB_MAC_ENBL			(1 << 0)
+#define MGB_MAC_DSBL			(1 << 1)
+
 /** MAC Statistics **/
 #define MGB_MAC_STAT_RX_FCS_ERR_CNT	0x1200
 #define MGB_MAC_STAT_RX_ALIGN_ERR_CNT	0x1204
