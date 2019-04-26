@@ -228,7 +228,6 @@ typedef struct if_softc_ctx {
 	pci_vendor_info_t isc_vendor_info;	/* set by iflib prior to attach_pre */
 	int isc_disable_msix;
 	if_txrx_t isc_txrx;
-	struct ifmedia *isc_media;
 } *if_softc_ctx_t;
 
 /*
