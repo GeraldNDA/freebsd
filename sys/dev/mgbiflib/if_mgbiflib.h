@@ -200,10 +200,10 @@
 #define MGB_INTR_SET			0x784 /* This triggers a particular interrupt */
 #define MGB_INTR_ENBL_SET		0x788
 #define MGB_INTR_STS_ANY		(0x1)
-#define MGB_INTR_STS_RX_ANY		0x0F000000
 #define MGB_INTR_STS_RX(_channel)	(1 << (24 + (_channel)))
-#define MGB_INTR_STS_TX_ANY		0x000F0000
+#define MGB_INTR_STS_RX_ANY		(0xF << 24)
 #define MGB_INTR_STS_TX(_channel)	(1 << (16 + (_channel)))
+#define MGB_INTR_STS_TX_ANY		(0xF << 16)
 #define MGB_INTR_STS_TEST		(1 << 9)
 #define MGB_INTR_ENBL_CLR		0x78C
 
